@@ -10,6 +10,7 @@ import com.nexustools.genericui.nativeimpl.dialog.DialogWindowNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.FileBrowserDialogNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.StandardDialogsNativeImpl
 import com.nexustools.genericui.nativeimpl.dock.*
+import com.nexustools.genericui.nativeimpl.document.BookContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.feedback.ProgressBarNativeImpl
 import com.nexustools.genericui.nativeimpl.feedback.SpinnerNativeImpl
 import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
@@ -65,8 +66,9 @@ class IosNativeFactory : NativeFactory {
     override fun createDockWindow(): DockWindowNativeImpl<*> = IosDockWindowImpl()
     override fun createToolPalette(): ToolPaletteNativeImpl<*> = IosToolPaletteImpl()
 
-    // Layout
+    // Layout & Printable Book Documents
     override fun createContainer(classPrefix: String): ContainerNativeImpl<*> = IosContainerImpl(classPrefix)
+    override fun createBookContainer(): BookContainerNativeImpl<*> = IosBookContainerImpl()
     override fun createScrollView(): ScrollViewNativeImpl<*> = IosScrollViewImpl()
     override fun createDivider(): DividerNativeImpl<*> = IosDividerImpl()
 

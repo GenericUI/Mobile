@@ -10,6 +10,7 @@ import com.nexustools.genericui.nativeimpl.dialog.DialogWindowNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.FileBrowserDialogNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.StandardDialogsNativeImpl
 import com.nexustools.genericui.nativeimpl.dock.*
+import com.nexustools.genericui.nativeimpl.document.BookContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.feedback.ProgressBarNativeImpl
 import com.nexustools.genericui.nativeimpl.feedback.SpinnerNativeImpl
 import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
@@ -72,8 +73,9 @@ class AndroidNativeFactory(
     override fun createDockWindow(): DockWindowNativeImpl<*> = AndroidDockWindowImpl()
     override fun createToolPalette(): ToolPaletteNativeImpl<*> = AndroidToolPaletteImpl()
 
-    // Layout
+    // Layout & Printable Book Documents
     override fun createContainer(classPrefix: String): ContainerNativeImpl<*> = AndroidContainerImpl(classPrefix)
+    override fun createBookContainer(): BookContainerNativeImpl<*> = AndroidBookContainerImpl()
     override fun createScrollView(): ScrollViewNativeImpl<*> = AndroidScrollViewImpl()
     override fun createDivider(): DividerNativeImpl<*> = AndroidDividerImpl()
 
