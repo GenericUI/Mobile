@@ -12,6 +12,7 @@ class MobileGestureRecognizer(
     val touchSlopPx: Float = 8f,
     val edgeSwipeThresholdPx: Float = 24f,
     val doubleTapTimeoutMs: Long = 300L,
+    val longPressTimeoutMs: Long = 500L,
     val minimumFlingVelocityPxPerSec: Float = 250f
 ) {
     private data class PointerSample(
@@ -22,7 +23,9 @@ class MobileGestureRecognizer(
         var currentY: Float,
         var previousX: Float,
         var previousY: Float,
-        var lastTimestampMs: Long
+        val startTimestampMs: Long,
+        var lastTimestampMs: Long,
+        var longPressTriggered: Boolean = false
     )
 
     private val activePointers = linkedMapOf<Int, PointerSample>()
@@ -45,6 +48,8 @@ class MobileGestureRecognizer(
         rotationDeltaRadians: Float
     ) -> Unit)? = null
 
+    var onLongPress: ((x: Float, y: Float) -> Unit)? = null
+
     fun onPointerDown(pointerId: Int, x: Float, y: Float, timestampMs: Long) {
         activePointers[pointerId] = PointerSample(
             id = pointerId,
@@ -54,6 +59,7 @@ class MobileGestureRecognizer(
             currentY = y,
             previousX = x,
             previousY = y,
+            startTimestampMs = timestampMs,
             lastTimestampMs = timestampMs
         )
         if (activePointers.size == 1) {
@@ -91,6 +97,10 @@ class MobileGestureRecognizer(
             }
             if (isPanning) {
                 onGestureDetected?.invoke(MobileGestureType.PAN, Point(x, y), dx, dy, 1f, 0f)
+            } else if (!sample.longPressTriggered && (timestampMs - sample.startTimestampMs) >= longPressTimeoutMs) {
+                sample.longPressTriggered = true
+                onGestureDetected?.invoke(MobileGestureType.LONG_PRESS, Point(x, y), 0f, 0f, 1f, 0f)
+                onLongPress?.invoke(x, y)
             }
         } else if (activePointers.size >= 2) {
             val pts = activePointers.values.toList()
@@ -122,15 +132,22 @@ class MobileGestureRecognizer(
             } else {
                 val totalDist = hypot(x - sample.startX, y - sample.startY)
                 if (totalDist < touchSlopPx) {
-                    val sinceLastTap = timestampMs - lastTapTimestampMs
-                    val tapDist = hypot(x - lastTapPoint.x, y - lastTapPoint.y)
-                    if (sinceLastTap in 1..doubleTapTimeoutMs && tapDist < touchSlopPx * 3f) {
-                        lastTapTimestampMs = 0L
-                        onGestureDetected?.invoke(MobileGestureType.DOUBLE_TAP, focal, 0f, 0f, 1f, 0f)
-                    } else {
-                        lastTapTimestampMs = timestampMs
-                        lastTapPoint = focal
-                        onGestureDetected?.invoke(MobileGestureType.TAP, focal, 0f, 0f, 1f, 0f)
+                    val holdDuration = timestampMs - sample.startTimestampMs
+                    if (!sample.longPressTriggered && holdDuration >= longPressTimeoutMs) {
+                        sample.longPressTriggered = true
+                        onGestureDetected?.invoke(MobileGestureType.LONG_PRESS, focal, 0f, 0f, 1f, 0f)
+                        onLongPress?.invoke(x, y)
+                    } else if (!sample.longPressTriggered) {
+                        val sinceLastTap = timestampMs - lastTapTimestampMs
+                        val tapDist = hypot(x - lastTapPoint.x, y - lastTapPoint.y)
+                        if (sinceLastTap in 1..doubleTapTimeoutMs && tapDist < touchSlopPx * 3f) {
+                            lastTapTimestampMs = 0L
+                            onGestureDetected?.invoke(MobileGestureType.DOUBLE_TAP, focal, 0f, 0f, 1f, 0f)
+                        } else {
+                            lastTapTimestampMs = timestampMs
+                            lastTapPoint = focal
+                            onGestureDetected?.invoke(MobileGestureType.TAP, focal, 0f, 0f, 1f, 0f)
+                        }
                     }
                 }
             }
@@ -140,7 +157,8 @@ class MobileGestureRecognizer(
 
     fun triggerLongPressIfStationary(pointerId: Int) {
         val sample = activePointers[pointerId] ?: return
-        if (!isPanning && activePointers.size == 1) {
+        if (!isPanning && activePointers.size == 1 && !sample.longPressTriggered) {
+            sample.longPressTriggered = true
             onGestureDetected?.invoke(
                 MobileGestureType.LONG_PRESS,
                 Point(sample.currentX, sample.currentY),
@@ -149,7 +167,13 @@ class MobileGestureRecognizer(
                 1f,
                 0f
             )
+            onLongPress?.invoke(sample.currentX, sample.currentY)
         }
+    }
+
+    fun performLongPress(x: Float = 0f, y: Float = 0f) {
+        onGestureDetected?.invoke(MobileGestureType.LONG_PRESS, Point(x, y), 0f, 0f, 1f, 0f)
+        onLongPress?.invoke(x, y)
     }
 
     fun reset() {

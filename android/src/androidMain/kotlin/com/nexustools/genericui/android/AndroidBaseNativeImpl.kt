@@ -1,5 +1,6 @@
 package com.nexustools.genericui.android
 
+import android.view.MotionEvent
 import android.view.View
 import android.view.animation.PathInterpolator
 import com.nexustools.genericui.core.NativeImpl
@@ -10,11 +11,13 @@ import com.nexustools.genericui.event.WheelEvent
 import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
+import com.nexustools.genericui.mobile.gesture.MobileGestureRecognizer
 import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
 import com.nexustools.genericui.style.transition.CssTransform2D
 import com.nexustools.genericui.style.transition.CssTransitionSpec
+import kotlin.math.hypot
 
 /**
  * Base [NativeImpl] for the `:android` backend.
@@ -30,11 +33,21 @@ open class AndroidBaseNativeImpl(
 
     override val nativeWidget: AndroidViewHandle = AndroidViewHandle(viewClassName, initialView)
 
+    val gestureRecognizer: MobileGestureRecognizer = MobileGestureRecognizer()
+
     protected var styleSnapshot: BootstrapStyleSnapshot =
         BootstrapStyleSnapshot(componentPrefix = componentClassPrefix)
 
     private var tooltipTextValue: String? = null
     private var preferredSizeValue: Size? = null
+
+    private var lastTouchX: Float = 0f
+    private var lastTouchY: Float = 0f
+    private var touchStartX: Float = 0f
+    private var touchStartY: Float = 0f
+    private var touchDownTimestampMs: Long = 0L
+    private var longPressFiredForTouch: Boolean = false
+    private var touchListenerAttached: Boolean = false
 
     protected var onClickListener: (() -> Unit)? = null
     protected var onDoubleClickListener: (() -> Unit)? = null
@@ -45,6 +58,18 @@ open class AndroidBaseNativeImpl(
     protected var onWheelListener: ((WheelEvent) -> Unit)? = null
     protected var onKeyDownListener: ((KeyEvent) -> Unit)? = null
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
+
+    init {
+        gestureRecognizer.onLongPress = { x, y ->
+            if (!longPressFiredForTouch) {
+                longPressFiredForTouch = true
+                lastTouchX = x
+                lastTouchY = y
+                nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+                onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2))
+            }
+        }
+    }
 
     override fun setClass(className: String) {
         styleSnapshot = BootstrapClassMapper.fromClassString(className, componentClassPrefix)
@@ -219,19 +244,136 @@ open class AndroidBaseNativeImpl(
         return true
     }
 
+    override fun setAttribute(name: String, value: String?) {
+        if (value == null) {
+            nativeWidget.attributes.remove(name)
+        } else {
+            nativeWidget.attributes[name] = value
+        }
+    }
+
     override fun setOnClick(listener: (() -> Unit)?) {
         onClickListener = listener
         nativeWidget.androidView?.setOnClickListener(if (listener != null) View.OnClickListener { listener() } else null)
     }
 
     override fun setOnDoubleClick(listener: (() -> Unit)?) { onDoubleClickListener = listener }
-    override fun setOnContextMenu(listener: ((PointerEvent) -> Unit)?) { onContextMenuListener = listener }
-    override fun setOnPointerDown(listener: ((PointerEvent) -> Unit)?) { onPointerDownListener = listener }
-    override fun setOnPointerMove(listener: ((PointerEvent) -> Unit)?) { onPointerMoveListener = listener }
-    override fun setOnPointerUp(listener: ((PointerEvent) -> Unit)?) { onPointerUpListener = listener }
+
+    override fun setOnContextMenu(listener: ((PointerEvent) -> Unit)?) {
+        onContextMenuListener = listener
+        nativeWidget.attributes["longPressContextMenuEnabled"] = (listener != null).toString()
+        val view = nativeWidget.androidView
+        if (view != null) {
+            view.isLongClickable = listener != null
+            if (listener != null) {
+                view.setOnLongClickListener {
+                    if (!longPressFiredForTouch) {
+                        longPressFiredForTouch = true
+                        nativeWidget.attributes["lastContextMenuEvent"] = "$lastTouchX,$lastTouchY"
+                        listener(PointerEvent(x = lastTouchX, y = lastTouchY, button = 2))
+                    }
+                    true
+                }
+                ensureTouchListenerAttached(view)
+            } else {
+                view.setOnLongClickListener(null)
+            }
+        }
+    }
+
+    override fun setOnPointerDown(listener: ((PointerEvent) -> Unit)?) {
+        onPointerDownListener = listener
+        nativeWidget.androidView?.let { ensureTouchListenerAttached(it) }
+    }
+
+    override fun setOnPointerMove(listener: ((PointerEvent) -> Unit)?) {
+        onPointerMoveListener = listener
+        nativeWidget.androidView?.let { ensureTouchListenerAttached(it) }
+    }
+
+    override fun setOnPointerUp(listener: ((PointerEvent) -> Unit)?) {
+        onPointerUpListener = listener
+        nativeWidget.androidView?.let { ensureTouchListenerAttached(it) }
+    }
+
     override fun setOnWheel(listener: ((WheelEvent) -> Unit)?) { onWheelListener = listener }
     override fun setOnKeyDown(listener: ((KeyEvent) -> Unit)?) { onKeyDownListener = listener }
     override fun setOnKeyUp(listener: ((KeyEvent) -> Unit)?) { onKeyUpListener = listener }
+
+    fun performLongPress(x: Float = 0f, y: Float = 0f): Boolean {
+        lastTouchX = x
+        lastTouchY = y
+        longPressFiredForTouch = true
+        val listener = onContextMenuListener ?: return false
+        nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+        listener(PointerEvent(x = x, y = y, button = 2))
+        return true
+    }
+
+    fun performClick(): Boolean {
+        val listener = onClickListener ?: return false
+        listener()
+        return true
+    }
+
+    fun dispatchClick() {
+        onClickListener?.invoke()
+    }
+
+    fun dispatchContextMenu(event: PointerEvent) {
+        onContextMenuListener?.invoke(event)
+    }
+
+    private fun ensureTouchListenerAttached(view: View) {
+        if (touchListenerAttached) return
+        touchListenerAttached = true
+        view.setOnTouchListener { _, event ->
+            val x = event.x
+            val y = event.y
+            lastTouchX = x
+            lastTouchY = y
+            val pointerId = if (event.pointerCount > 0) event.getPointerId(0) else 0
+            val eventTime = event.eventTime
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    touchStartX = x
+                    touchStartY = y
+                    touchDownTimestampMs = eventTime
+                    longPressFiredForTouch = false
+                    gestureRecognizer.onPointerDown(pointerId, x, y, eventTime)
+                    onPointerDownListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    gestureRecognizer.onPointerMove(pointerId, x, y, eventTime)
+                    val dist = hypot(x - touchStartX, y - touchStartY)
+                    if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
+                        (eventTime - touchDownTimestampMs) >= 500L
+                    ) {
+                        longPressFiredForTouch = true
+                        nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+                        onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                    }
+                    onPointerMoveListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dist = hypot(x - touchStartX, y - touchStartY)
+                    if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
+                        (eventTime - touchDownTimestampMs) >= 500L
+                    ) {
+                        longPressFiredForTouch = true
+                        nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+                        onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                    }
+                    gestureRecognizer.onPointerUp(pointerId, x, y, eventTime)
+                    onPointerUpListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    gestureRecognizer.reset()
+                }
+            }
+            false
+        }
+    }
 
     override fun dispose() {
         nativeWidget.removeFromParent()

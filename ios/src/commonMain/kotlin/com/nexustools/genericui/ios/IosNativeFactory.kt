@@ -112,4 +112,8 @@ class IosNativeFactory : NativeFactory {
     override fun createNotificationManager(): NotificationManagerNativeImpl = IosNotificationManagerImpl()
     override fun createNetworkMonitor(): NetworkMonitorNativeImpl = IosNetworkMonitorImpl()
     override fun createPreferenceStore(appName: String): PreferenceStoreNativeImpl = IosPreferenceStoreImpl(appName)
+    override fun createConfigDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
+        IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = false)
+    override fun createCacheDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
+        IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = true)
 }

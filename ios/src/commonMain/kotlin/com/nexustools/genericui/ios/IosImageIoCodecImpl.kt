@@ -1,6 +1,7 @@
 package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.image.*
+import com.nexustools.genericui.image.cache.ImageCacheManager
 import com.nexustools.genericui.image.codec.LibJpegCodec
 import com.nexustools.genericui.image.codec.LibPngCodec
 import com.nexustools.genericui.image.codec.LibWebpCodec
@@ -22,7 +23,9 @@ class IosImageIoCodecImpl : ImageCodecNativeImpl {
                 colorSpace = buf.colorSpace
             )
         }
-        val bytes = source.encodedBytes ?: return null
+        val bytes = source.encodedBytes
+            ?: source.uriOrPath?.let { ImageCacheManager.fetchAndCacheBytes(it) }
+            ?: return null
         if (bytes.isEmpty()) return null
         return when (ImageFormat.detectFromHeader(bytes)) {
             ImageFormat.JPEG -> LibJpegCodec.probeJpegMetadata(bytes)
@@ -34,7 +37,9 @@ class IosImageIoCodecImpl : ImageCodecNativeImpl {
 
     override fun decode(source: ImageSource, options: ImageDecodeOptions): ImageBuffer? {
         source.memoryBuffer?.let { return it.copy() }
-        val bytes = source.encodedBytes ?: return null
+        val bytes = source.encodedBytes
+            ?: source.uriOrPath?.let { ImageCacheManager.fetchAndCacheBytes(it) }
+            ?: return null
         if (bytes.isEmpty()) return null
         return when (ImageFormat.detectFromHeader(bytes)) {
             ImageFormat.JPEG -> LibJpegCodec.decode(bytes)

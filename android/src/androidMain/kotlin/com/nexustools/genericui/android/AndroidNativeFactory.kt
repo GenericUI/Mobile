@@ -120,4 +120,18 @@ class AndroidNativeFactory(
     override fun createNetworkMonitor(): NetworkMonitorNativeImpl = AndroidNetworkMonitorImpl()
     override fun createPreferenceStore(appName: String): PreferenceStoreNativeImpl =
         AndroidPreferenceStoreImpl(appName, context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext)
+    override fun createConfigDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
+        AndroidUserDirectoryNativeImpl(
+            appName = appName,
+            subdirectory = subdirectory,
+            isCache = false,
+            context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
+        )
+    override fun createCacheDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
+        AndroidUserDirectoryNativeImpl(
+            appName = appName,
+            subdirectory = subdirectory,
+            isCache = true,
+            context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
+        )
 }

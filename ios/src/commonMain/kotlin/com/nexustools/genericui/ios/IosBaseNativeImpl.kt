@@ -8,6 +8,7 @@ import com.nexustools.genericui.event.WheelEvent
 import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
+import com.nexustools.genericui.mobile.gesture.MobileGestureRecognizer
 import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
@@ -26,6 +27,8 @@ open class IosBaseNativeImpl(
 
     override val nativeWidget: IosNativeView = IosNativeView(uiViewClassName)
 
+    val gestureRecognizer: MobileGestureRecognizer = MobileGestureRecognizer()
+
     protected var styleSnapshot: BootstrapStyleSnapshot =
         BootstrapStyleSnapshot(componentPrefix = componentClassPrefix)
 
@@ -41,6 +44,13 @@ open class IosBaseNativeImpl(
     protected var onWheelListener: ((WheelEvent) -> Unit)? = null
     protected var onKeyDownListener: ((KeyEvent) -> Unit)? = null
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
+
+    init {
+        gestureRecognizer.onLongPress = { x, y ->
+            nativeWidget.metadata["lastContextMenuEvent"] = "$x,$y"
+            onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2))
+        }
+    }
 
     override fun setClass(className: String) {
         styleSnapshot = BootstrapClassMapper.fromClassString(className, componentClassPrefix)
@@ -190,15 +200,50 @@ open class IosBaseNativeImpl(
         return true
     }
 
+    override fun setAttribute(name: String, value: String?) {
+        if (value == null) {
+            nativeWidget.metadata.remove(name)
+        } else {
+            nativeWidget.metadata[name] = value
+        }
+    }
+
     override fun setOnClick(listener: (() -> Unit)?) { onClickListener = listener }
     override fun setOnDoubleClick(listener: (() -> Unit)?) { onDoubleClickListener = listener }
-    override fun setOnContextMenu(listener: ((PointerEvent) -> Unit)?) { onContextMenuListener = listener }
+
+    override fun setOnContextMenu(listener: ((PointerEvent) -> Unit)?) {
+        onContextMenuListener = listener
+        nativeWidget.metadata["UILongPressGestureRecognizer"] = (listener != null).toString()
+        nativeWidget.metadata["longPressContextMenuEnabled"] = (listener != null).toString()
+    }
+
     override fun setOnPointerDown(listener: ((PointerEvent) -> Unit)?) { onPointerDownListener = listener }
     override fun setOnPointerMove(listener: ((PointerEvent) -> Unit)?) { onPointerMoveListener = listener }
     override fun setOnPointerUp(listener: ((PointerEvent) -> Unit)?) { onPointerUpListener = listener }
     override fun setOnWheel(listener: ((WheelEvent) -> Unit)?) { onWheelListener = listener }
     override fun setOnKeyDown(listener: ((KeyEvent) -> Unit)?) { onKeyDownListener = listener }
     override fun setOnKeyUp(listener: ((KeyEvent) -> Unit)?) { onKeyUpListener = listener }
+
+    fun performLongPress(x: Float = 0f, y: Float = 0f): Boolean {
+        val listener = onContextMenuListener ?: return false
+        nativeWidget.metadata["lastContextMenuEvent"] = "$x,$y"
+        listener(PointerEvent(x = x, y = y, button = 2))
+        return true
+    }
+
+    fun performClick(): Boolean {
+        val listener = onClickListener ?: return false
+        listener()
+        return true
+    }
+
+    fun dispatchClick() {
+        onClickListener?.invoke()
+    }
+
+    fun dispatchContextMenu(event: PointerEvent) {
+        onContextMenuListener?.invoke(event)
+    }
 
     override fun dispose() {
         nativeWidget.removeFromSuperview()
