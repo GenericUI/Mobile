@@ -14,6 +14,7 @@ The **`:mobile:ios`** module (`com.nexustools.genericui.ios.*`) is the native Ap
    - Maps GenericUI components directly to native UIKit controls (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UIProgressView`, `UIScrollView`, `UISplitViewController`, `UIMenu`).
    - Bridges `UISceneDelegate` and `UIViewController` lifecycle callbacks (`viewDidLoad`, `viewWillAppear`, `viewDidAppear`, `viewWillDisappear`, `didReceiveMemoryWarning`, `viewWillTransitionToSize`) through `:mobile:shared`'s `MobileLifecycleBridge` and `MobileAdaptiveFragmentCoordinator`.
    - Translates `TitleBar` instructions (`window.setTitleBar(titleBar)` or `fragment.setNavBar(titleBar)`) into native **`UINavigationBar`** / `UINavigationItem` titles and `UIBarButtonItem` actions, and maps `BottomNavigationBar` to **`UITabBar`**.
+   - **Cross-Backend `themeColor` (`genericui { application { themeColor = "#..." } }` & `application.setThemeColor`)**: Automatically generates `AccentColor.colorset` and `theme_color.colorset` in `Assets.xcassets`, exposes `R.color.theme_color` / `RC.color.theme_color`, and updates `IosApplicationImpl` (`UIView.tintColor`).
    - Propagates `UIWindow.safeAreaInsets` (Dynamic Island, notch, Home Indicator, and iPad Stage Manager / Split View bounds) into `MobileSafeAreaTracker`.
 2. **`CADisplayLink` VBlank-Synchronized Rendering (`registerVBlankRender` with `deltaMs`)**:
    - Synchronizes `AbstractCanvas`, `Canvas2D`, `GLCanvas`, and `VKCanvas` frame callbacks directly to iOS's `CADisplayLink` (including 120Hz ProMotion adaptive frame pacing on supported iPhone Pro and iPad Pro displays), computing exact `deltaMs` intervals between display refreshes.
@@ -50,6 +51,7 @@ The **`:mobile:ios`** module (`com.nexustools.genericui.ios.*`) is the native Ap
 | `IosNotificationManagerImpl` | `UNUserNotificationCenter` local & push notification manager. |
 | `IosPermissionManagerImpl` | iOS `Info.plist` privacy permission requester (Camera, Microphone, Photo Library, Notifications). |
 | `IosNetworkMonitorImpl` | Apple `NWPathMonitor` (`Network.framework`) reachability observer. |
+| `IosPreferenceStoreImpl` | Native iOS `PreferenceStoreNativeImpl` storing per-key `.plist` binary property list files (`BinaryPlist` `bplist00`) inside `<NSHomeDirectory()>/Library/Preferences/<appName>/<key>.plist`. |
 
 ---
 

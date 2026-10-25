@@ -109,4 +109,5 @@ class IosNativeFactory : NativeFactory {
     override fun createSystemTray(): SystemTrayNativeImpl = IosSystemTrayImpl()
     override fun createNotificationManager(): NotificationManagerNativeImpl = IosNotificationManagerImpl()
     override fun createNetworkMonitor(): NetworkMonitorNativeImpl = IosNetworkMonitorImpl()
+    override fun createPreferenceStore(appName: String): PreferenceStoreNativeImpl = IosPreferenceStoreImpl(appName)
 }

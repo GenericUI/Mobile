@@ -57,6 +57,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AndroidViewHandle.activeContext = applicationContext
+        AndroidPreferenceStoreImpl.applicationContext = applicationContext
         AndroidFileBrowserDialogImpl.activeHostActivity = this
 
         if (GenericUI.activeFactory == null) {

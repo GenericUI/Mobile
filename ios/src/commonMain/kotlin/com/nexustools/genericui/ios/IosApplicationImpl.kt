@@ -13,6 +13,7 @@ class IosApplicationImpl : ApplicationNativeImpl<IosNativeView> {
     val lifecycleBridge: MobileLifecycleBridge = MobileLifecycleBridge()
 
     private var themeMode: ThemeMode = ThemeMode.DARK
+    private var themeColor: String? = null
 
     override fun setThemeMode(mode: ThemeMode) {
         themeMode = mode
@@ -20,6 +21,20 @@ class IosApplicationImpl : ApplicationNativeImpl<IosNativeView> {
     }
 
     override fun getThemeMode(): ThemeMode = themeMode
+
+    override fun setThemeColor(colorHex: String?) {
+        val clean = colorHex?.trim()?.takeIf { it.isNotEmpty() }
+        themeColor = clean
+        if (clean != null) {
+            nativeApplication.metadata["tintColor"] = clean
+            nativeApplication.metadata["themeColor"] = clean
+        } else {
+            nativeApplication.metadata.remove("tintColor")
+            nativeApplication.metadata.remove("themeColor")
+        }
+    }
+
+    override fun getThemeColor(): String? = themeColor
 
     override fun runEventLoop(onStarted: () -> Unit) {
         lifecycleBridge.dispatchCreate(null)

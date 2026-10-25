@@ -50,6 +50,7 @@ class AndroidNativeFactory(
     init {
         if (context != null) {
             AndroidViewHandle.activeContext = context
+            AndroidPreferenceStoreImpl.applicationContext = context.applicationContext ?: context
         }
         ImageLoader.activeNativeCodec = AndroidBitmapImageCodecImpl()
     }
@@ -115,4 +116,6 @@ class AndroidNativeFactory(
     override fun createSystemTray(): SystemTrayNativeImpl = AndroidSystemTrayImpl()
     override fun createNotificationManager(): NotificationManagerNativeImpl = AndroidNotificationManagerImpl()
     override fun createNetworkMonitor(): NetworkMonitorNativeImpl = AndroidNetworkMonitorImpl()
+    override fun createPreferenceStore(appName: String): PreferenceStoreNativeImpl =
+        AndroidPreferenceStoreImpl(appName, context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext)
 }

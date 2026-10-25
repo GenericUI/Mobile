@@ -13,6 +13,7 @@ class AndroidApplicationImpl : ApplicationNativeImpl<AndroidViewHandle> {
     override val nativeApplication: AndroidViewHandle = AndroidViewHandle("android.app.Application")
     val lifecycleBridge: MobileLifecycleBridge = MobileLifecycleBridge()
     private var themeMode: ThemeMode = ThemeMode.DARK
+    private var themeColor: String? = null
 
     override fun setThemeMode(mode: ThemeMode) {
         themeMode = mode
@@ -25,6 +26,20 @@ class AndroidApplicationImpl : ApplicationNativeImpl<AndroidViewHandle> {
     }
 
     override fun getThemeMode(): ThemeMode = themeMode
+
+    override fun setThemeColor(colorHex: String?) {
+        val clean = colorHex?.trim()?.takeIf { it.isNotEmpty() }
+        themeColor = clean
+        if (clean != null) {
+            nativeApplication.attributes["themeColor"] = clean
+            nativeApplication.attributes["statusBarColor"] = clean
+        } else {
+            nativeApplication.attributes.remove("themeColor")
+            nativeApplication.attributes.remove("statusBarColor")
+        }
+    }
+
+    override fun getThemeColor(): String? = themeColor
 
     override fun runEventLoop(onStarted: () -> Unit) {
         lifecycleBridge.dispatchCreate(null)

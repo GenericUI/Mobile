@@ -18,6 +18,7 @@ The **`:mobile:android`** module (`com.nexustools.genericui.android.*`) is the n
      - `fragment.setBottomNavigationBar(bottomNav)` $\longrightarrow$ renders and populates a native **`com.google.android.material.bottomnavigation.BottomNavigationView`**.
      - `fragment.setFullscreen(true)` $\longrightarrow$ hides system status/navigation bars via `WindowInsetsControllerCompat` (`BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`) and configures `layoutInDisplayCutoutMode` (`SHORT_EDGES`, `NEVER`, `DEFAULT`).
      - `enterFragmentPictureInPicture(PipConfig)` $\longrightarrow$ enters Android Picture-in-Picture mode (`PictureInPictureParams.Builder().setAspectRatio(...)`) via `MobilePipController`.
+     - **Cross-Backend `themeColor` (`genericui { application { themeColor = "#..." } }` & `application.setThemeColor`)**: Automatically emits `<color name="theme_color">` and `<color name="colorPrimary">` into Android `res/values/colors.xml`, exposes `R.color.theme_color` / `RC.color.theme_color`, and updates `AndroidApplicationImpl` statusBar / Material primary tinting.
 2. **True Lazy Loading & Unloading with `RecyclerView` + `MobileLazyViewportPool` (`AndroidLazyListImpl`, `AndroidLazyGridImpl`, `AndroidTreeViewImpl`)**:
    - Backed by AndroidX `RecyclerView` (`LinearLayoutManager` / `GridLayoutManager`) synchronized with `:mobile:shared`'s `MobileLazyViewportPool`.
    - Only items inside the visible viewport window `[firstVisibleIndex .. lastVisibleIndex]` are bound (`onBind`), while items scrolling out of view are immediately unbound (`onUnbind`) and recycled into the scrap pool or disposed on `onTrimMemory`.
@@ -51,6 +52,7 @@ The **`:mobile:android`** module (`com.nexustools.genericui.android.*`) is the n
 | `AndroidNotificationManagerImpl` | Android `NotificationManagerCompat` + `NotificationChannel` dispatcher. |
 | `AndroidPermissionManagerImpl` | Runtime Android permissions (`ContextCompat.checkSelfPermission` / `ActivityCompat.requestPermissions`) manager. |
 | `AndroidNetworkMonitorImpl` | `ConnectivityManager.NetworkCallback` observer. |
+| `AndroidPreferenceStoreImpl` | Android `PreferenceStoreNativeImpl` backed by `Context.getSharedPreferences(appName, Context.MODE_PRIVATE)` with a strong-referenced `SharedPreferences.OnSharedPreferenceChangeListener`. |
 
 ---
 
