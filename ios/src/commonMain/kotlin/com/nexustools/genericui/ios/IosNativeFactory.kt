@@ -107,6 +107,7 @@ class IosNativeFactory : NativeFactory {
     override fun createTreeView(): TreeViewNativeImpl<*> = IosTreeViewImpl()
 
     // System Services
+    override fun createUiTimerScheduler(): UiTimerNativeImpl = IosUiTimerImpl()
     override fun createPermissionManager(): PermissionManagerNativeImpl = IosPermissionManagerImpl()
     override fun createSystemTray(): SystemTrayNativeImpl = IosSystemTrayImpl()
     override fun createNotificationManager(): NotificationManagerNativeImpl = IosNotificationManagerImpl()
@@ -116,4 +117,6 @@ class IosNativeFactory : NativeFactory {
         IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = false)
     override fun createCacheDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
         IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = true)
+    override fun createResourceResolver(): com.nexustools.genericui.resources.ResourceResolverNativeImpl =
+        IosResourceResolverImpl()
 }

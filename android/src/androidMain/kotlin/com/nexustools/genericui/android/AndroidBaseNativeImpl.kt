@@ -48,6 +48,7 @@ open class AndroidBaseNativeImpl(
     private var touchDownTimestampMs: Long = 0L
     private var longPressFiredForTouch: Boolean = false
     private var touchListenerAttached: Boolean = false
+    private var hoverListenerAttached: Boolean = false
 
     protected var onClickListener: (() -> Unit)? = null
     protected var onDoubleClickListener: (() -> Unit)? = null
@@ -55,6 +56,8 @@ open class AndroidBaseNativeImpl(
     protected var onPointerDownListener: ((PointerEvent) -> Unit)? = null
     protected var onPointerMoveListener: ((PointerEvent) -> Unit)? = null
     protected var onPointerUpListener: ((PointerEvent) -> Unit)? = null
+    protected var onPointerEnterListener: ((PointerEvent) -> Unit)? = null
+    protected var onPointerLeaveListener: ((PointerEvent) -> Unit)? = null
     protected var onWheelListener: ((WheelEvent) -> Unit)? = null
     protected var onKeyDownListener: ((KeyEvent) -> Unit)? = null
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
@@ -294,6 +297,37 @@ open class AndroidBaseNativeImpl(
     override fun setOnPointerUp(listener: ((PointerEvent) -> Unit)?) {
         onPointerUpListener = listener
         nativeWidget.androidView?.let { ensureTouchListenerAttached(it) }
+    }
+
+    override fun setOnPointerEnter(listener: ((PointerEvent) -> Unit)?) {
+        onPointerEnterListener = listener
+        nativeWidget.androidView?.let { ensureHoverListenerAttached(it) }
+    }
+
+    override fun setOnPointerLeave(listener: ((PointerEvent) -> Unit)?) {
+        onPointerLeaveListener = listener
+        nativeWidget.androidView?.let { ensureHoverListenerAttached(it) }
+    }
+
+    fun dispatchPointerEnter(event: PointerEvent = PointerEvent()) {
+        onPointerEnterListener?.invoke(event)
+    }
+
+    fun dispatchPointerLeave(event: PointerEvent = PointerEvent()) {
+        onPointerLeaveListener?.invoke(event)
+    }
+
+    private fun ensureHoverListenerAttached(view: View) {
+        if (hoverListenerAttached) return
+        hoverListenerAttached = true
+        view.setOnHoverListener { _, event ->
+            val pe = PointerEvent(x = event.x, y = event.y)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER -> onPointerEnterListener?.invoke(pe)
+                MotionEvent.ACTION_HOVER_EXIT -> onPointerLeaveListener?.invoke(pe)
+            }
+            false
+        }
     }
 
     override fun setOnWheel(listener: ((WheelEvent) -> Unit)?) { onWheelListener = listener }

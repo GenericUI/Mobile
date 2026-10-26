@@ -114,6 +114,7 @@ class AndroidNativeFactory(
     override fun createTreeView(): TreeViewNativeImpl<*> = AndroidTreeViewImpl()
 
     // System Services
+    override fun createUiTimerScheduler(): UiTimerNativeImpl = AndroidUiTimerImpl()
     override fun createPermissionManager(): PermissionManagerNativeImpl = AndroidPermissionManagerImpl()
     override fun createSystemTray(): SystemTrayNativeImpl = AndroidSystemTrayImpl()
     override fun createNotificationManager(): NotificationManagerNativeImpl = AndroidNotificationManagerImpl()
@@ -134,4 +135,6 @@ class AndroidNativeFactory(
             isCache = true,
             context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
         )
+    override fun createResourceResolver(): com.nexustools.genericui.resources.ResourceResolverNativeImpl =
+        AndroidResourceResolverImpl(context)
 }

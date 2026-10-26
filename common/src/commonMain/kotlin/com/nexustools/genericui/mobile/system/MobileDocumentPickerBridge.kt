@@ -83,7 +83,7 @@ class MobileDocumentPickerBridge {
         "mov" -> "com.apple.quicktime-movie"
         "mp3" -> "public.mp3"
         "wav" -> "com.microsoft.waveform-audio"
-        "zip", "hacanvas", "ora" -> "public.zip-archive"
+        "zip", "ora" -> "public.zip-archive"
         else -> "public.data"
     }
 

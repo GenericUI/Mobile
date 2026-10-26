@@ -9,7 +9,7 @@ import kotlin.math.roundToInt
 
 /**
  * Shared mobile layout state machine for [AdaptiveSplitTabFragment] across `:android` and `:ios`.
- * Coordinates Episode Caster's 3-mode responsive layout (tablet/foldable landscape multi-column vs
+ * Coordinates the 3-mode responsive layout (tablet/foldable landscape multi-column vs
  * phone landscape optional immersive fullscreen vs phone/tablet portrait single-flow with tabs).
  */
 class MobileAdaptiveFragmentCoordinator(

@@ -19,14 +19,14 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":common"))
-            api(project(":mobile:shared"))
+            api(project(":mobile:common"))
         }
         androidMain.dependencies {
-            implementation(libs.androidx.core.ktx)
-            implementation(libs.androidx.appcompat)
-            implementation(libs.androidx.recyclerview)
-            implementation(libs.google.material)
-            implementation(libs.kotlinx.coroutinesAndroid)
+            api(libs.androidx.core.ktx)
+            api(libs.androidx.appcompat)
+            api(libs.androidx.recyclerview)
+            api(libs.google.material)
+            api(libs.kotlinx.coroutinesAndroid)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

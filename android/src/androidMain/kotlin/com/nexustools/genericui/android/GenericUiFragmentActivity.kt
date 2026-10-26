@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -18,22 +19,27 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.nexustools.genericui.component.fragment.Fragment
 import com.nexustools.genericui.component.fragment.FragmentBundle
+import com.nexustools.genericui.component.shell.Window
+import com.nexustools.genericui.core.AbstractComponent
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.enums.window.DisplayCutoutMode
 import com.nexustools.genericui.mobile.layout.MobileAdaptiveFragmentCoordinator
 import com.nexustools.genericui.mobile.system.MobileLifecycleBridge
 import com.nexustools.genericui.mobile.system.MobilePipController
+import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
 import com.nexustools.genericui.window.PipConfig
 
 /**
  * `AppCompatActivity` subclass that hosts a GenericUI [Fragment] 1:1 on Android.
  *
- * Wires the complete Android `Activity` lifecycle (`onCreate`, `onStart`, `onResume`, `onPause`, `onStop`,
- * `onSaveInstanceState`, `onDestroy`, `onConfigurationChanged`, `onPictureInPictureModeChanged`, `onWindowFocusChanged`,
- * `onActivityResult` for `AndroidFileBrowserDialogImpl`), optional `Fragment.getNavBar()` -> [MaterialToolbar],
- * optional `Fragment.getBottomNavigationBar()` -> [BottomNavigationView], `Fragment.isFullscreen()` ->
- * [WindowInsetsControllerCompat], and Picture-in-Picture via [MobilePipController].
+ * - Owns [activityWindowImpl] ([AndroidWindowImpl]) and [activityWindow] ([Window]) so
+ *   `fragment.hostingWindow` and `fragment.attachedWindow` are backed by a real `IWindow`
+ *   reporting mobile navbar-as-titlebar [com.nexustools.genericui.window.TitleCapabilities].
+ * - Enforces the Navbar-as-TitleBar rule: when the hosted [Fragment] sets neither `TitleBar`,
+ *   `MenuBar`, nor `NavBar`, [toolbarView] is not added to [rootLayout] at all (removed from
+ *   [rootLayout], not merely `View.GONE`). When `TitleBar`, `MenuBar`, or `NavBar` is set,
+ *   [toolbarView] is mounted at index `0` of [rootLayout].
  */
 abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
@@ -41,13 +47,38 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
     val adaptiveCoordinator: MobileAdaptiveFragmentCoordinator = MobileAdaptiveFragmentCoordinator()
     val pipController: MobilePipController = MobilePipController()
 
+    val activityWindow: Window = run {
+        if (GenericUI.activeFactory == null) {
+            GenericUI.initialize(AndroidNativeFactory())
+        }
+        Window(title = "GenericUI").also { win ->
+            win.show(GenericUI.activeFactory)
+        }
+    }
+
+    val activityWindowImpl: AndroidWindowImpl =
+        (activityWindow.ensureNativeImpl() as? AndroidWindowImpl) ?: AndroidWindowImpl().also { impl ->
+            runCatching {
+                val field = AbstractComponent::class.java.getDeclaredField("nativeImpl")
+                field.isAccessible = true
+                field.set(activityWindow, impl)
+            }
+        }
+
     var hostedFragment: Fragment? = null
         private set
 
-    private var rootLayout: LinearLayout? = null
-    private var toolbarView: MaterialToolbar? = null
-    private var contentContainer: FrameLayout? = null
-    private var bottomNavigationView: BottomNavigationView? = null
+    var rootLayout: LinearLayout? = null
+        private set
+    var toolbarView: MaterialToolbar? = null
+        private set
+    var contentContainer: FrameLayout? = null
+        private set
+    var bottomNavigationView: BottomNavigationView? = null
+        private set
+
+    var isToolbarInRootLayout: Boolean = false
+        private set
 
     /**
      * Subclasses override this method to provide the root GenericUI [Fragment] hosted by this Activity.
@@ -63,6 +94,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         if (GenericUI.activeFactory == null) {
             GenericUI.initialize(AndroidNativeFactory(applicationContext))
         }
+        AndroidActivityRegistry.installAsPlatformLauncher()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -85,7 +117,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
             visibility = View.GONE
         }
 
-        root.addView(toolbar)
+        // Navbar-as-TitleBar Rule: do NOT add toolbar to root unless TitleBar, MenuBar, or NavBar is set
         root.addView(content)
         root.addView(bottomNav)
         setContentView(root)
@@ -94,13 +126,42 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         toolbarView = toolbar
         contentContainer = content
         bottomNavigationView = bottomNav
+        isToolbarInRootLayout = false
 
         val fragment = createFragment()
-        hostedFragment = fragment
-
+        val launchArgs = AndroidActivityRegistry.extractFragmentBundle(intent) ?: fragment.arguments
         val restoredBundle = savedInstanceState?.let { bundleToFragmentBundle(it) }
-        lifecycleBridge.attachFragment(fragment, restoredBundle)
+        attachHostedFragment(fragment, launchArgs, restoredBundle)
+    }
+
+    /**
+     * Binds [fragment] to [activityWindow], sets [Fragment.arguments] from [launchArgs], dispatches
+     * [MobileLifecycleBridge.attachFragment] with the merged [FragmentBundle], and synchronizes chrome.
+     */
+    fun attachHostedFragment(
+        fragment: Fragment = createFragment(),
+        launchArgs: FragmentBundle? = null,
+        savedState: FragmentBundle? = null
+    ): Fragment {
+        hostedFragment = fragment
+        val resolvedLaunchArgs = launchArgs ?: fragment.arguments
+        if (resolvedLaunchArgs != null) {
+            fragment.arguments = resolvedLaunchArgs
+        }
+        bindFragmentToActivityWindow(fragment)
+
+        val effectiveBundle: FragmentBundle? = when {
+            resolvedLaunchArgs != null && savedState != null -> FragmentBundle().apply {
+                putAll(resolvedLaunchArgs)
+                putAll(savedState)
+            }
+            resolvedLaunchArgs != null -> resolvedLaunchArgs
+            else -> savedState
+        }
+
+        lifecycleBridge.attachFragment(fragment, effectiveBundle)
         syncFragmentChrome(fragment)
+        return fragment
     }
 
     override fun onStart() {
@@ -129,9 +190,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
         val fragmentBundle = FragmentBundle()
         lifecycleBridge.dispatchSaveInstanceState(fragmentBundle)
-        for (key in fragmentBundle.keys()) {
-            fragmentBundle.getString(key)?.let { outState.putString(key, it) }
-        }
+        AndroidActivityRegistry.putFragmentBundleToAndroidBundle(outState, fragmentBundle)
     }
 
     override fun onDestroy() {
@@ -141,6 +200,18 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         lifecycleBridge.dispatchDestroy()
         hostedFragment = null
         super.onDestroy()
+    }
+
+    @Deprecated("Deprecated in Android Activity, delegates back press to hosted GenericUI Fragment first")
+    override fun onBackPressed() {
+        if (hostedFragment?.onBackPressed() == true) {
+            return
+        }
+        if (lifecycleBridge.dispatchBackPressed()) {
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -159,6 +230,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        activityWindow.dispatchWindowFocusChanged(hasFocus)
         hostedFragment?.onWindowFocusChanged(hasFocus)
     }
 
@@ -186,43 +258,86 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
     }
 
     /**
-     * Synchronizes optional [Fragment.getNavBar] -> [MaterialToolbar],
-     * [Fragment.getBottomNavigationBar] -> [BottomNavigationView], and
-     * [Fragment.isFullscreen] -> [WindowInsetsControllerCompat].
+     * Synchronizes optional [Fragment.getTitleBar], [Fragment.getMenuBar], [Fragment.getNavBar] ->
+     * [MaterialToolbar] / [AndroidWindowImpl], [Fragment.getBottomNavigationBar] -> [BottomNavigationView],
+     * and [Fragment.isFullscreen] -> [WindowInsetsControllerCompat].
+     *
+     * When neither `TitleBar`, `MenuBar`, nor `NavBar` is set (or when fullscreen is active),
+     * [toolbarView] is removed from [rootLayout] completely. When any of them is set, [toolbarView]
+     * is added at index `0` of [rootLayout].
      */
     fun syncFragmentChrome(fragment: Fragment) {
+        bindFragmentToActivityWindow(fragment)
         val fullscreen = fragment.isFullscreen()
-        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-        if (fullscreen) {
-            insetsController.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController.hide(WindowInsetsCompat.Type.systemBars())
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                window.attributes = window.attributes.apply {
-                    layoutInDisplayCutoutMode = when (fragment.getDisplayCutoutMode()) {
-                        DisplayCutoutMode.SHORT_EDGES, DisplayCutoutMode.ALWAYS ->
-                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                        DisplayCutoutMode.NEVER ->
-                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
-                        DisplayCutoutMode.DEFAULT ->
-                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                    }
-                }
-            }
-        } else {
-            insetsController.show(WindowInsetsCompat.Type.systemBars())
+        val cutoutMode = fragment.getDisplayCutoutMode()
+
+        if (fragment.pageTitle.isNotBlank()) {
+            activityWindow.setTitle(fragment.pageTitle)
+            activityWindowImpl.setTitle(fragment.pageTitle)
         }
 
         val navBar = fragment.getNavBar()
-        toolbarView?.let { tb ->
-            if (!fullscreen && navBar != null) {
+        val titleBar = fragment.getTitleBar()
+        val menuBar = fragment.getMenuBar()
+        val bottomNav = fragment.getBottomNavigationBar()
+
+        activityWindow.setFullscreen(fullscreen, cutoutMode)
+        activityWindow.setTitleBar(titleBar)
+        activityWindow.setMenuBar(menuBar)
+        activityWindow.setNavBar(if (fullscreen) null else navBar)
+        activityWindow.setBottomNavigationBar(if (fullscreen) null else bottomNav)
+
+        activityWindowImpl.setFullscreen(fullscreen, cutoutMode)
+        activityWindowImpl.applyTitleBarInstructions(titleBar)
+        activityWindowImpl.setMenuBarNative(menuBar?.ensureNativeImpl() as? MenuBarNativeImpl<*>)
+        activityWindowImpl.setNavBarNative(if (fullscreen) null else navBar?.ensureNativeImpl())
+        activityWindowImpl.setBottomNavigationBarNative(if (fullscreen) null else bottomNav?.ensureNativeImpl())
+
+        runCatching {
+            val win = window
+            if (win != null) {
+                val insetsController = WindowCompat.getInsetsController(win, win.decorView)
+                if (fullscreen) {
+                    insetsController.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    insetsController.hide(WindowInsetsCompat.Type.systemBars())
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        win.attributes = win.attributes.apply {
+                            layoutInDisplayCutoutMode = when (cutoutMode) {
+                                DisplayCutoutMode.SHORT_EDGES, DisplayCutoutMode.ALWAYS ->
+                                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                                DisplayCutoutMode.NEVER ->
+                                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+                                DisplayCutoutMode.DEFAULT ->
+                                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                            }
+                        }
+                    }
+                } else {
+                    insetsController.show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+        }
+
+        val showTopToolbar = !fullscreen && (navBar != null || titleBar != null || menuBar != null)
+        isToolbarInRootLayout = showTopToolbar
+        val root = rootLayout
+        val tb = toolbarView
+        if (tb != null) {
+            if (showTopToolbar) {
+                if (root != null && tb.parent !== root) {
+                    (tb.parent as? ViewGroup)?.removeView(tb)
+                    root.addView(tb, 0)
+                }
                 tb.visibility = View.VISIBLE
             } else {
+                if (root != null && tb.parent === root) {
+                    root.removeView(tb)
+                }
                 tb.visibility = View.GONE
             }
         }
 
-        val bottomNav = fragment.getBottomNavigationBar()
         bottomNavigationView?.let { bn ->
             if (!fullscreen && bottomNav != null) {
                 bn.visibility = View.VISIBLE
@@ -232,17 +347,22 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         }
     }
 
-    private fun bundleToFragmentBundle(bundle: Bundle): FragmentBundle {
-        val out = FragmentBundle()
-        for (key in bundle.keySet()) {
-            when (val v = bundle.get(key)) {
-                is String -> out.putString(key, v)
-                is Int -> out.putInt(key, v)
-                is Long -> out.putLong(key, v)
-                is Double -> out.putDouble(key, v)
-                is Boolean -> out.putBoolean(key, v)
-            }
+    private fun bindFragmentToActivityWindow(fragment: Fragment) {
+        if (fragment.attachedWindow === activityWindow && fragment.hostingWindow === activityWindow) {
+            return
         }
-        return out
+        runCatching {
+            val attachedWinField = Fragment::class.java.getDeclaredField("attachedWindow")
+            attachedWinField.isAccessible = true
+            attachedWinField.set(fragment, activityWindow)
+        }
+        runCatching {
+            val attachedIWinField = Fragment::class.java.getDeclaredField("attachedIWindow")
+            attachedIWinField.isAccessible = true
+            attachedIWinField.set(fragment, activityWindow)
+        }
     }
+
+    private fun bundleToFragmentBundle(bundle: Bundle): FragmentBundle =
+        AndroidActivityRegistry.bundleToFragmentBundle(bundle)
 }

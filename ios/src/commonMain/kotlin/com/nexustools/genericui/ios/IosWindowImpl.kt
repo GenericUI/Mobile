@@ -1,5 +1,6 @@
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.core.AbstractContainer
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.window.DisplayCutoutMode
 import com.nexustools.genericui.enums.window.WindowState
@@ -13,6 +14,7 @@ import com.nexustools.genericui.nativeimpl.shell.MenuItemNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.WindowNativeImpl
 import com.nexustools.genericui.window.PipConfig
 import com.nexustools.genericui.window.TitleBar
+import com.nexustools.genericui.window.TitleCapabilities
 import com.nexustools.genericui.window.WindowConfiguration
 
 /**
@@ -20,17 +22,45 @@ import com.nexustools.genericui.window.WindowConfiguration
  * integrating [MobileSafeAreaTracker] (Dynamic Island / Home Indicator / keyboard safe areas)
  * and [MobilePipController] (`AVPictureInPictureController`).
  *
- * Implements mobile `MenuBar` as a top [IosNavbarImpl] with the window title on the left,
- * [TitleBar] custom components on the right (to the left of the dropdown menu button), and a
- * right-aligned dropdown menu button ([mobileMenuBarDropdownButton]) that activates the `MenuBar`
- * as a menu ([mobileMenuBarPopupMenu]) on the right of the navbar.
+ * Implements mobile `TitleBar` and `MenuBar` as an optional top [IosNavbarImpl] (`UINavigationBar`,
+ * `isTitleBarRequired = false`). When neither `TitleBar` nor `MenuBar` is set, no navbar is shown at
+ * the top of the view hierarchy. When a `TitleBar` or `MenuBar` is set, renders a native-layout
+ * [IosNavbarImpl] with [TitleBar] custom components detached from any body parent and placed in the
+ * navbar, and (when a `MenuBar` is set) a right-aligned dropdown menu button ([mobileMenuBarDropdownButton])
+ * that activates [mobileMenuBarPopupMenu].
  */
 class IosWindowImpl : IosBaseContainerNativeImpl("UIWindow", "window"), WindowNativeImpl<IosNativeView> {
-    override val supportsCustomTitleBar: Boolean = false
+    override val supportsCustomTitleBar: Boolean = true
     override val supportsEmbeddedMenuBarInTitleBar: Boolean = false
     override val supportsMultiWindow: Boolean = false
     override val supportsNavbarMenuBar: Boolean = true
     override val supportsMobileNavbarMenuBar: Boolean = true
+
+    override fun getTitleCapabilities(): TitleCapabilities = TitleCapabilities(
+        isSupported = true,
+        isEmulated = true,
+        supportsCustomTitleBar = true,
+        supportsCustomComponents = true,
+        supportsLeadingComponents = true,
+        supportsCenterComponents = true,
+        supportsTrailingComponents = true,
+        supportsEmbeddedMenuBar = true,
+        supportsNavbarMenuBar = true,
+        supportsWindowIcon = true,
+        supportsWindowTitle = true,
+        supportsMinimizeButton = false,
+        supportsMaximizeButton = false,
+        supportsCloseButton = false,
+        supportsCollapseToggle = false,
+        supportsControlsPlacement = false,
+        supportsCustomHeight = false,
+        supportsSystemAeroOrBackdrop = true,
+        isToolWindowTitleBar = false,
+        isTitleBarRequired = false,
+        titleBarRendersAsNavbar = true,
+        menuBarRendersAsNavbar = true,
+        menuBarMergesIntoTitleNavbar = true
+    )
 
     val safeAreaTracker: MobileSafeAreaTracker = MobileSafeAreaTracker()
     val pipController: MobilePipController = MobilePipController()
@@ -92,7 +122,11 @@ class IosWindowImpl : IosBaseContainerNativeImpl("UIWindow", "window"), WindowNa
     override fun isFullscreen(): Boolean = fullscreenFlag
 
     override fun applyTitleBarInstructions(titleBar: TitleBar?) {
+        if (this.titleBarInstructions != titleBar) {
+            this.titleBarInstructions?.setHostEmbedsComponents(false)
+        }
         titleBarInstructions = titleBar
+        titleBar?.setHostEmbedsComponents(true)
         rebuildMobileMenuBarNavbar()
     }
 
@@ -130,7 +164,8 @@ class IosWindowImpl : IosBaseContainerNativeImpl("UIWindow", "window"), WindowNa
 
     fun rebuildMobileMenuBarNavbar() {
         val mb = menuBarImpl as? IosMenuBarImpl
-        if (mb != null && !fullscreenFlag) {
+        val tb = titleBarInstructions
+        if ((mb != null || tb != null) && !fullscreenFlag) {
             val navbar: IosNavbarImpl = if (navBarImpl is IosNavbarImpl) {
                 synthesizedMenuBarNavbar?.let { removeChildNative(it) }
                 synthesizedMenuBarNavbar = null
@@ -144,119 +179,133 @@ class IosWindowImpl : IosBaseContainerNativeImpl("UIWindow", "window"), WindowNa
             }
             navbar.setVisible(true)
 
-            val effectiveTitle = if (titleBarInstructions?.showWindowTitle == false) "" else titleText
+            val effectiveTitle = if (tb?.showWindowTitle == false) "" else titleText
             navbar.setBrandTitle(effectiveTitle)
+            if (tb?.showWindowIcon != false && !tb?.iconPath.isNullOrBlank()) {
+                navbar.nativeWidget.metadata["brandIcon"] = tb!!.iconPath!!
+            } else {
+                navbar.nativeWidget.metadata.remove("brandIcon")
+            }
             navbar.nativeWidget.metadata["titlePlacement"] = "left"
             navbar.nativeWidget.metadata["brandPlacement"] = "left"
+            navbar.nativeWidget.metadata["layoutStyle"] = "UINavigationBar"
+            navbar.nativeWidget.metadata["nativeNavigationBarLayout"] = "true"
 
             navbar.clearChildrenNative()
             for (baselineItem in explicitNavBarBaselineItems) {
                 navbar.addChildNative(baselineItem, -1)
             }
 
-            val tb = titleBarInstructions
-            val customComponents = if (tb != null) {
-                tb.leadingComponents + tb.centerComponents + tb.trailingComponents
-            } else {
-                emptyList()
-            }
-            for (comp in customComponents) {
-                val compImpl = comp.nativeImpl ?: if (comp.isVisible) comp.ensureNativeImpl() else null
-                if (compImpl != null) {
-                    compImpl.addClass("navbar-custom-item")
-                    compImpl.setAttribute("navbarPlacement", "right-before-menu")
-                    compImpl.setAttribute("positionRelativeToMenuButton", "left")
-                    navbar.addChildNative(compImpl, -1)
+            if (tb != null) {
+                tb.setHostEmbedsComponents(true)
+                val customComponents = tb.leadingComponents + tb.centerComponents + tb.trailingComponents
+                for (comp in customComponents) {
+                    (comp.parent as? AbstractContainer)?.removeChild(comp)
+                    comp.mountedInTitleBar = true
+                    val compImpl = comp.nativeImpl ?: if (comp.isVisible) comp.ensureNativeImpl() else null
+                    if (compImpl != null) {
+                        (compImpl.nativeWidget as? IosNativeView)?.removeFromSuperview()
+                        compImpl.addClass("navbar-custom-item")
+                        compImpl.setAttribute("mountedInTitleBar", "true")
+                        compImpl.setAttribute("navbarPlacement", if (mb != null) "right-before-menu" else "right")
+                        compImpl.setAttribute("positionRelativeToMenuButton", if (mb != null) "left" else "none")
+                        navbar.addChildNative(compImpl, -1)
+                    }
                 }
             }
 
-            val dropdown = IosDropdownImpl()
-            dropdown.setClass("dropdown dropdown-toggle mobile-menubar-trigger ms-auto")
-            dropdown.setLabel("☰")
-            dropdown.setAttribute("navbarPlacement", "right")
-            dropdown.setAttribute("role", "menubar-dropdown")
+            if (mb != null) {
+                val dropdown = IosDropdownImpl()
+                dropdown.setClass("dropdown dropdown-toggle mobile-menubar-trigger ms-auto")
+                dropdown.setLabel("☰")
+                dropdown.setAttribute("navbarPlacement", "right")
+                dropdown.setAttribute("role", "menubar-dropdown")
 
-            val popupMenu = IosContextMenuImpl()
-            popupMenu.setVisible(false)
+                val popupMenu = IosContextMenuImpl()
+                popupMenu.setVisible(false)
 
-            val dropdownEntries = mutableListOf<Pair<String, String>>()
-            val actionByKey = linkedMapOf<String, IosBaseNativeImpl>()
-            var itemCounter = 0
+                val dropdownEntries = mutableListOf<Pair<String, String>>()
+                val actionByKey = linkedMapOf<String, IosBaseNativeImpl>()
+                var itemCounter = 0
 
-            fun collectMenuNode(node: NativeImpl<*>, parentMenuLabel: String?) {
-                when (node) {
-                    is IosMenuImpl -> {
-                        popupMenu.sourceMenus.add(node)
-                        val menuLabel = node.getLabel()
-                        val nextPrefix = when {
-                            parentMenuLabel.isNullOrBlank() -> menuLabel
-                            menuLabel.isBlank() -> parentMenuLabel
-                            else -> "$parentMenuLabel > $menuLabel"
-                        }
-                        for (child in node.items) {
-                            collectMenuNode(child, nextPrefix)
-                        }
-                    }
-                    is DividerNativeImpl<*> -> {
-                        val sepId = "sep_${itemCounter++}"
-                        dropdownEntries.add(sepId to "---")
-                        val proxyDivider = IosDividerImpl()
-                        popupMenu.addChildNative(proxyDivider, -1)
-                    }
-                    is MenuItemNativeImpl<*> -> {
-                        val itemId = "item_${itemCounter++}"
-                        val itemLabel = node.getLabel()
-                        val displayLabel = if (parentMenuLabel.isNullOrBlank()) {
-                            itemLabel
-                        } else {
-                            "$parentMenuLabel > $itemLabel"
-                        }
-                        dropdownEntries.add(itemId to displayLabel)
-                        val checkable = (node as? IosMenuItemImpl)?.checkable ?: false
-                        val radio = (node as? IosMenuItemImpl)?.radio ?: false
-                        val proxyItem = IosMenuItemImpl(checkable = checkable, radio = radio)
-                        proxyItem.setLabel(itemLabel)
-                        proxyItem.setIcon(node.getIcon())
-                        proxyItem.setShortcut(node.getShortcut())
-                        proxyItem.setChecked(node.isChecked())
-                        proxyItem.setEnabled(node.isEnabled())
-                        proxyItem.setAttribute("menuPath", displayLabel)
-                        if (node is IosBaseNativeImpl) {
-                            proxyItem.setOnClick {
-                                node.dispatchClick()
-                                proxyItem.setChecked(node.isChecked())
+                fun collectMenuNode(node: NativeImpl<*>, parentMenuLabel: String?) {
+                    when (node) {
+                        is IosMenuImpl -> {
+                            popupMenu.sourceMenus.add(node)
+                            val menuLabel = node.getLabel()
+                            val nextPrefix = when {
+                                parentMenuLabel.isNullOrBlank() -> menuLabel
+                                menuLabel.isBlank() -> parentMenuLabel
+                                else -> "$parentMenuLabel > $menuLabel"
                             }
-                            actionByKey[itemId] = node
-                            actionByKey[itemLabel] = node
-                            actionByKey[displayLabel] = node
+                            for (child in node.items) {
+                                collectMenuNode(child, nextPrefix)
+                            }
                         }
-                        popupMenu.addChildNative(proxyItem, -1)
+                        is DividerNativeImpl<*> -> {
+                            val sepId = "sep_${itemCounter++}"
+                            dropdownEntries.add(sepId to "---")
+                            val proxyDivider = IosDividerImpl()
+                            popupMenu.addChildNative(proxyDivider, -1)
+                        }
+                        is MenuItemNativeImpl<*> -> {
+                            val itemId = "item_${itemCounter++}"
+                            val itemLabel = node.getLabel()
+                            val displayLabel = if (parentMenuLabel.isNullOrBlank()) {
+                                itemLabel
+                            } else {
+                                "$parentMenuLabel > $itemLabel"
+                            }
+                            dropdownEntries.add(itemId to displayLabel)
+                            val checkable = (node as? IosMenuItemImpl)?.checkable ?: false
+                            val radio = (node as? IosMenuItemImpl)?.radio ?: false
+                            val proxyItem = IosMenuItemImpl(checkable = checkable, radio = radio)
+                            proxyItem.setLabel(itemLabel)
+                            proxyItem.setIcon(node.getIcon())
+                            proxyItem.setShortcut(node.getShortcut())
+                            proxyItem.setChecked(node.isChecked())
+                            proxyItem.setEnabled(node.isEnabled())
+                            proxyItem.setAttribute("menuPath", displayLabel)
+                            if (node is IosBaseNativeImpl) {
+                                proxyItem.setOnClick {
+                                    node.dispatchClick()
+                                    proxyItem.setChecked(node.isChecked())
+                                }
+                                actionByKey[itemId] = node
+                                actionByKey[itemLabel] = node
+                                actionByKey[displayLabel] = node
+                            }
+                            popupMenu.addChildNative(proxyItem, -1)
+                        }
                     }
                 }
-            }
 
-            for (topChild in mb.items) {
-                collectMenuNode(topChild, null)
-            }
-
-            dropdown.setItems(dropdownEntries)
-            dropdown.setOnItemSelected { selectedKey ->
-                val target = actionByKey[selectedKey]
-                    ?: selectedKey.toIntOrNull()?.let { idx ->
-                        dropdownEntries.getOrNull(idx)?.let { actionByKey[it.first] }
-                    }
-                if (target != null && target.isEnabled()) {
-                    target.dispatchClick()
-                    popupMenu.hide()
+                for (topChild in mb.items) {
+                    collectMenuNode(topChild, null)
                 }
-            }
-            dropdown.setOnClick {
-                popupMenu.showAt(dropdown, 0, 0)
-            }
 
-            navbar.addChildNative(dropdown, -1)
-            mobileMenuBarDropdownButton = dropdown
-            mobileMenuBarPopupMenu = popupMenu
+                dropdown.setItems(dropdownEntries)
+                dropdown.setOnItemSelected { selectedKey ->
+                    val target = actionByKey[selectedKey]
+                        ?: selectedKey.toIntOrNull()?.let { idx ->
+                            dropdownEntries.getOrNull(idx)?.let { actionByKey[it.first] }
+                        }
+                    if (target != null && target.isEnabled()) {
+                        target.dispatchClick()
+                        popupMenu.hide()
+                    }
+                }
+                dropdown.setOnClick {
+                    popupMenu.showAt(dropdown, 0, 0)
+                }
+
+                navbar.addChildNative(dropdown, -1)
+                mobileMenuBarDropdownButton = dropdown
+                mobileMenuBarPopupMenu = popupMenu
+            } else {
+                mobileMenuBarDropdownButton = null
+                mobileMenuBarPopupMenu = null
+            }
         } else {
             synthesizedMenuBarNavbar?.let { removeChildNative(it) }
             synthesizedMenuBarNavbar = null
