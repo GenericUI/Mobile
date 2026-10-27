@@ -54,6 +54,7 @@ class AndroidNativeFactory(
             AndroidPreferenceStoreImpl.applicationContext = context.applicationContext ?: context
         }
         ImageLoader.activeNativeCodec = AndroidBitmapImageCodecImpl()
+        AndroidApplicationImpl.installSystemThemeDetector()
     }
 
     // Shell & Window

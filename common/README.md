@@ -5,15 +5,23 @@
 
 ---
 
+## Styling, `BootstrapType.NONE`, & User Class Isolation in `MobileBaseNativeImpl`
+
+- **`BootstrapType.NONE` Default & Semantic `BootstrapType` Tinting**: When `styleSnapshot.type == BootstrapType.NONE` (the default) and no inline `ComponentStyle` background/border is set, mobile controls render as untinted native Android/iOS system views. When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set, `MobileBaseNativeImpl` resolves the semantic color (`BootstrapColorPalette.resolveColor(type, darkTheme)`) for tinting the native view (supporting `outline = true/false`).
+- **Strict User CSS Class Isolation**: `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are evaluated directly by the mobile layout and rendering engines.
+- **`ComponentStyle` & Silent Ignore**: `applyComponentStyle(style: ComponentStyle)` applies supported properties (`backgroundColor`, `color`, `accentColor`, `borderColor`, `borderRadius`, `opacity`, `padding`, `margin`, `visibility`, `display`) and silently ignores unsupported CSS properties and transitions.
+
+---
+
 ## Core Classes
 
 | Class | Package | Description |
 |-------|---------|-------------|
-| `MobileBaseNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile widget implementation handling layout bounds, visibility, touch/focus state, CSS styling, and single-placement `mountedInTitleBar` tracking |
+| `MobileBaseNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile widget implementation handling `ComponentStyle`, `ComponentBootstrap`, strict `customClasses` isolation, semantic `BootstrapType` tinting, layout bounds, visibility, touch/focus state, and single-placement `mountedInTitleBar` tracking |
 | `MobileBaseContainerNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile container managing child widget lists and layout passes |
 | `MobileNativeWidget` | `com.nexustools.genericui.mobile` | Common interface for mobile widget implementations |
 | `MobileWindowNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile window implementation reporting mobile `TitleCapabilities` (`isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, `menuBarMergesIntoTitleNavbar = true`) |
-| `MobileApplicationNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile application lifecycle and active screen/window registry |
+| `MobileApplicationNativeImpl` | `com.nexustools.genericui.mobile` | Base mobile application lifecycle, `PrecompiledStyleSheet` registry (`addStyleSheet` / `removeStyleSheet`), and `ThemeMode` (`AUTO`, `DARK`, `LIGHT`) manager |
 | `MobileLazyViewportEngine` | `com.nexustools.genericui.mobile` | Touch-scroll virtualized viewport range calculation and item recycling engine |
 | `MobileLazyListNativeImpl` | `com.nexustools.genericui.mobile.container` | Virtualized `LazyList` implementation for mobile targets |
 | `MobileLazyGridNativeImpl` | `com.nexustools.genericui.mobile.container` | Virtualized `LazyGrid` implementation for mobile targets |

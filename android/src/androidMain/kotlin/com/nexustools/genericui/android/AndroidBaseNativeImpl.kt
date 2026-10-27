@@ -1,10 +1,17 @@
 package com.nexustools.genericui.android
 
+import android.content.res.ColorStateList
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.PathInterpolator
+import android.widget.TextView
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.*
+import com.nexustools.genericui.enums.css.CssDisplay
+import com.nexustools.genericui.enums.css.CssUnit
+import com.nexustools.genericui.enums.css.CssVisibility
+import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.event.KeyEvent
 import com.nexustools.genericui.event.PointerEvent
 import com.nexustools.genericui.event.WheelEvent
@@ -12,18 +19,28 @@ import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.mobile.gesture.MobileGestureRecognizer
+import com.nexustools.genericui.style.RgbaColor
+import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
+import com.nexustools.genericui.style.color.BootstrapColorPalette
+import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssCursorValue
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
+import com.nexustools.genericui.style.theme.SystemThemeDetector
 import com.nexustools.genericui.style.transition.CssTransform2D
 import com.nexustools.genericui.style.transition.CssTransitionSpec
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * Base [NativeImpl] for the `:android` backend.
  *
- * Stores and executes Bootstrap 5 style Enums directly via [styleSnapshot] and synthesizes
- * `getClass()` / parses `setClass()` via [BootstrapClassMapper].
+ * - User custom classes (`setClass`, `getClass`, `getClasses`, `addClass`, `removeClass`, `hasClass`)
+ *   are strictly isolated from Bootstrap 5 enum classes (`styleSnapshot`).
+ * - When `type == null` and no custom background color is set, native Android/Material system control
+ *   appearance is preserved (`useSystemControlAppearance = true`). When a [BootstrapType] is set,
+ *   tints the control using [BootstrapColorPalette].
  */
 open class AndroidBaseNativeImpl(
     viewClassName: String = "android.view.View",
@@ -37,6 +54,9 @@ open class AndroidBaseNativeImpl(
 
     protected var styleSnapshot: BootstrapStyleSnapshot =
         BootstrapStyleSnapshot(componentPrefix = componentClassPrefix)
+
+    protected var customStyleBackgroundColor: RgbaColor? = null
+    protected var customStyleTextColor: RgbaColor? = null
 
     private var tooltipTextValue: String? = null
     private var preferredSizeValue: Size? = null
@@ -63,6 +83,7 @@ open class AndroidBaseNativeImpl(
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
 
     init {
+        syncNativeBootstrapAppearance()
         gestureRecognizer.onLongPress = { x, y ->
             if (!longPressFiredForTouch) {
                 longPressFiredForTouch = true
@@ -75,89 +96,373 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun setClass(className: String) {
-        styleSnapshot = BootstrapClassMapper.fromClassString(className, componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
+        styleSnapshot = styleSnapshot.copy(customClasses = tokens)
+        nativeWidget.classes.clear()
+        nativeWidget.classes.addAll(tokens)
     }
 
     override fun getClass(): String =
-        BootstrapClassMapper.toClassString(styleSnapshot)
+        styleSnapshot.customClasses.joinToString(" ")
+
+    override fun getClasses(): Set<String> =
+        styleSnapshot.customClasses.toSet()
 
     override fun addClass(className: String) {
-        val combined = (getClass() + " " + className).trim()
-        styleSnapshot = BootstrapClassMapper.fromClassString(combined, componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return
+        val updated = LinkedHashSet(styleSnapshot.customClasses)
+        updated.addAll(tokens)
+        styleSnapshot = styleSnapshot.copy(customClasses = updated)
+        nativeWidget.classes.clear()
+        nativeWidget.classes.addAll(updated)
     }
 
     override fun removeClass(className: String) {
-        val remaining = getClass().split(Regex("\\s+")).filter { it.isNotEmpty() && it != className }
-        styleSnapshot = BootstrapClassMapper.fromClassString(remaining.joinToString(" "), componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return
+        val updated = LinkedHashSet(styleSnapshot.customClasses)
+        updated.removeAll(tokens.toSet())
+        styleSnapshot = styleSnapshot.copy(customClasses = updated)
+        nativeWidget.classes.clear()
+        nativeWidget.classes.addAll(updated)
     }
 
-    override fun hasClass(className: String): Boolean =
-        BootstrapClassMapper.toClassTokens(styleSnapshot).contains(className.trim())
+    override fun hasClass(className: String): Boolean {
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return false
+        return styleSnapshot.customClasses.containsAll(tokens)
+    }
 
-    override fun setType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(type = type) }
+    protected open fun syncNativeBootstrapAppearance() {
+        val normalizedSnapshot = styleSnapshot.copy(type = styleSnapshot.type?.takeIf { it != BootstrapType.NONE })
+        val enumClasses = BootstrapClassMapper.toEnumClassSet(normalizedSnapshot).filterNot { it.endsWith("-") }
+        nativeWidget.attributes["enumClasses"] = enumClasses.joinToString(" ")
+
+        val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val effectiveType = styleSnapshot.type ?: styleSnapshot.backgroundType
+        val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
+        val fgColor = customStyleTextColor
+            ?: styleSnapshot.textColorType?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+            ?: styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
+                BootstrapColorPalette.resolveForegroundOn(it)
+            }
+
+        if (tintColor == null) {
+            nativeWidget.attributes["useSystemControlAppearance"] = "true"
+            nativeWidget.attributes.remove("bootstrapTintColor")
+            nativeWidget.androidView?.backgroundTintList = null
+        } else {
+            nativeWidget.attributes["useSystemControlAppearance"] = "false"
+            nativeWidget.attributes["bootstrapTintColor"] = tintColor.toCssHex()
+            nativeWidget.androidView?.let { view ->
+                runCatching {
+                    view.backgroundTintList = ColorStateList.valueOf(tintColor.toArgbInt())
+                }.onFailure {
+                    view.setBackgroundColor(tintColor.toArgbInt())
+                }
+            }
+        }
+
+        if (fgColor != null) {
+            nativeWidget.attributes["bootstrapForegroundColor"] = fgColor.toCssHex()
+            (nativeWidget.androidView as? TextView)?.setTextColor(fgColor.toArgbInt())
+        } else {
+            nativeWidget.attributes.remove("bootstrapForegroundColor")
+        }
+
+        when (val w = styleSnapshot.width) {
+            BootstrapWidth.W_100 -> {
+                nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
+                nativeWidget.androidView?.layoutParams?.let { lp ->
+                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+                    nativeWidget.androidView?.layoutParams = lp
+                }
+            }
+            BootstrapWidth.W_25, BootstrapWidth.W_50, BootstrapWidth.W_75 -> {
+                nativeWidget.attributes["layoutWidth"] = "${w.percent ?: 100}%"
+            }
+            BootstrapWidth.W_AUTO -> {
+                nativeWidget.attributes["layoutWidth"] = "WRAP_CONTENT"
+            }
+            null -> nativeWidget.attributes.remove("layoutWidth")
+        }
+
+        when (val h = styleSnapshot.height) {
+            BootstrapHeight.H_100 -> {
+                nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
+                nativeWidget.androidView?.layoutParams?.let { lp ->
+                    lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+                    nativeWidget.androidView?.layoutParams = lp
+                }
+            }
+            BootstrapHeight.H_25, BootstrapHeight.H_50, BootstrapHeight.H_75 -> {
+                nativeWidget.attributes["layoutHeight"] = "${h.percent ?: 100}%"
+            }
+            BootstrapHeight.H_AUTO -> {
+                nativeWidget.attributes["layoutHeight"] = "WRAP_CONTENT"
+            }
+            null -> nativeWidget.attributes.remove("layoutHeight")
+        }
+
+        styleSnapshot.opacity?.let { op ->
+            val alpha = when (op) {
+                BootstrapOpacity.OPACITY_0 -> 0f
+                BootstrapOpacity.OPACITY_25 -> 0.25f
+                BootstrapOpacity.OPACITY_50 -> 0.5f
+                BootstrapOpacity.OPACITY_75 -> 0.75f
+                BootstrapOpacity.OPACITY_100 -> 1f
+            }
+            setOpacity(alpha)
+        }
+
+        when (styleSnapshot.visibility) {
+            BootstrapVisibility.INVISIBLE -> {
+                nativeWidget.attributes["visibility"] = "INVISIBLE"
+                nativeWidget.androidView?.visibility = View.INVISIBLE
+            }
+            BootstrapVisibility.VISIBLE -> {
+                nativeWidget.attributes["visibility"] = "VISIBLE"
+                if (nativeWidget.visible) {
+                    nativeWidget.androidView?.visibility = View.VISIBLE
+                }
+            }
+            null -> nativeWidget.attributes.remove("visibility")
+        }
+
+        if (styleSnapshot.display == DisplayMode.NONE) {
+            setVisible(false)
+        }
+
+        val mAll = spacingScaleToPx(styleSnapshot.marginAll)
+        val mX = spacingScaleToPx(styleSnapshot.marginX) ?: mAll
+        val mY = spacingScaleToPx(styleSnapshot.marginY) ?: mAll
+        val mTop = spacingScaleToPx(styleSnapshot.marginTop) ?: mY ?: 0
+        val mBottom = spacingScaleToPx(styleSnapshot.marginBottom) ?: mY ?: 0
+        val mLeft = spacingScaleToPx(styleSnapshot.marginStart) ?: mX ?: 0
+        val mRight = spacingScaleToPx(styleSnapshot.marginEnd) ?: mX ?: 0
+        if (mTop != 0 || mBottom != 0 || mLeft != 0 || mRight != 0) {
+            setMargin(EdgeInsets(mTop, mRight, mBottom, mLeft))
+        }
+
+        val pAll = spacingScaleToPx(styleSnapshot.paddingAll)
+        val pX = spacingScaleToPx(styleSnapshot.paddingX) ?: pAll
+        val pY = spacingScaleToPx(styleSnapshot.paddingY) ?: pAll
+        val pTop = spacingScaleToPx(styleSnapshot.paddingTop) ?: pY ?: 0
+        val pBottom = spacingScaleToPx(styleSnapshot.paddingBottom) ?: pY ?: 0
+        val pLeft = spacingScaleToPx(styleSnapshot.paddingStart) ?: pX ?: 0
+        val pRight = spacingScaleToPx(styleSnapshot.paddingEnd) ?: pX ?: 0
+        if (pTop != 0 || pBottom != 0 || pLeft != 0 || pRight != 0) {
+            setPadding(EdgeInsets(pTop, pRight, pBottom, pLeft))
+        }
+
+        styleSnapshot.shadow?.let { sh ->
+            val elev = when (sh) {
+                ShadowElevation.NONE -> 0f
+                ShadowElevation.SM -> 2f
+                ShadowElevation.REGULAR -> 6f
+                ShadowElevation.LG -> 12f
+            }
+            nativeWidget.attributes["elevation"] = elev.toString()
+            nativeWidget.androidView?.elevation = elev
+        }
+    }
+
+    private fun spacingScaleToPx(scale: SpacingScale?): Int? = when (scale) {
+        SpacingScale.S_0 -> 0
+        SpacingScale.S_1 -> 4
+        SpacingScale.S_2 -> 8
+        SpacingScale.S_3 -> 16
+        SpacingScale.S_4 -> 24
+        SpacingScale.S_5 -> 48
+        SpacingScale.AUTO, null -> null
+    }
+
+    override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
+        styleSnapshot = bootstrap.applyToSnapshot(styleSnapshot)
+        syncNativeBootstrapAppearance()
+    }
+
+    override fun applyComponentStyle(style: ComponentStyle) {
+        customStyleBackgroundColor = style.getBackgroundColor()
+        customStyleTextColor = style.getTextColor()
+
+        style.getOpacity()?.let { setOpacity(it) }
+
+        val wLen = style.getWidth()
+        val hLen = style.getHeight()
+        if (wLen != null || hLen != null) {
+            if (wLen?.unit == CssUnit.PERCENT && wLen.value == 100f) {
+                nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
+            }
+            if (hLen?.unit == CssUnit.PERCENT && hLen.value == 100f) {
+                nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
+            }
+            val wPx = wLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+                ?: preferredSizeValue?.width
+                ?: nativeWidget.bounds.width
+            val hPx = hLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+                ?: preferredSizeValue?.height
+                ?: nativeWidget.bounds.height
+            nativeWidget.bounds = Rect(nativeWidget.bounds.x, nativeWidget.bounds.y, wPx, hPx)
+        }
+
+        style.getPadding()?.let { setPadding(it.toEdgeInsets()) }
+        style.getMargin()?.let { setMargin(it.toEdgeInsets()) }
+
+        when (style.getVisibility()) {
+            CssVisibility.HIDDEN, CssVisibility.COLLAPSE -> {
+                nativeWidget.attributes["visibility"] = "INVISIBLE"
+                nativeWidget.androidView?.visibility = View.INVISIBLE
+            }
+            CssVisibility.VISIBLE -> {
+                nativeWidget.attributes["visibility"] = "VISIBLE"
+                if (nativeWidget.visible) nativeWidget.androidView?.visibility = View.VISIBLE
+            }
+            null -> {}
+        }
+
+        if (style.getDisplay() == CssDisplay.NONE) {
+            setVisible(false)
+        }
+        // Unsupported CSS properties on mobile (such as cursor) are silently ignored.
+        syncNativeBootstrapAppearance()
+    }
+
+    override fun setCustomCursor(cursor: CssCursorValue?) {
+        // Cursors are silently ignored on touch-first mobile platforms.
+    }
+
+    override fun setType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(type = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getType(): BootstrapType? = styleSnapshot.type
 
-    override fun setOutline(outline: Boolean) { styleSnapshot = styleSnapshot.copy(outline = outline) }
+    override fun setOutline(outline: Boolean) {
+        styleSnapshot = styleSnapshot.copy(outline = outline)
+        syncNativeBootstrapAppearance()
+    }
     override fun isOutline(): Boolean = styleSnapshot.outline
 
-    override fun setSize(size: BootstrapSize?) { styleSnapshot = styleSnapshot.copy(size = size) }
+    override fun setSize(size: BootstrapSize?) {
+        styleSnapshot = styleSnapshot.copy(size = size)
+        syncNativeBootstrapAppearance()
+    }
     override fun getSize(): BootstrapSize? = styleSnapshot.size
 
-    override fun setBackgroundType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(backgroundType = type) }
+    override fun setBackgroundType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(backgroundType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBackgroundType(): BootstrapType? = styleSnapshot.backgroundType
 
-    override fun setTextColorType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(textColorType = type) }
+    override fun setTextColorType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(textColorType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextColorType(): BootstrapType? = styleSnapshot.textColorType
 
-    override fun setBorderType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(borderType = type) }
+    override fun setBorderType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(borderType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBorderType(): BootstrapType? = styleSnapshot.borderType
 
-    override fun setTextAlignment(alignment: TextAlignment?) { styleSnapshot = styleSnapshot.copy(textAlignment = alignment) }
+    override fun setTextAlignment(alignment: TextAlignment?) {
+        styleSnapshot = styleSnapshot.copy(textAlignment = alignment)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextAlignment(): TextAlignment? = styleSnapshot.textAlignment
 
-    override fun setFontWeight(weight: FontWeight?) { styleSnapshot = styleSnapshot.copy(fontWeight = weight) }
+    override fun setFontWeight(weight: FontWeight?) {
+        styleSnapshot = styleSnapshot.copy(fontWeight = weight)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFontWeight(): FontWeight? = styleSnapshot.fontWeight
 
-    override fun setTextTransform(transform: TextTransform?) { styleSnapshot = styleSnapshot.copy(textTransform = transform) }
+    override fun setTextTransform(transform: TextTransform?) {
+        styleSnapshot = styleSnapshot.copy(textTransform = transform)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextTransform(): TextTransform? = styleSnapshot.textTransform
 
-    override fun setTextOverflow(overflow: TextOverflow?) { styleSnapshot = styleSnapshot.copy(textOverflow = overflow) }
+    override fun setTextOverflow(overflow: TextOverflow?) {
+        styleSnapshot = styleSnapshot.copy(textOverflow = overflow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextOverflow(): TextOverflow? = styleSnapshot.textOverflow
 
-    override fun setBorderRadius(radius: BorderRadiusStyle?) { styleSnapshot = styleSnapshot.copy(borderRadius = radius) }
+    override fun setBorderRadius(radius: BorderRadiusStyle?) {
+        styleSnapshot = styleSnapshot.copy(borderRadius = radius)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBorderRadius(): BorderRadiusStyle? = styleSnapshot.borderRadius
 
-    override fun setShadow(shadow: ShadowElevation?) { styleSnapshot = styleSnapshot.copy(shadow = shadow) }
+    override fun setShadow(shadow: ShadowElevation?) {
+        styleSnapshot = styleSnapshot.copy(shadow = shadow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getShadow(): ShadowElevation? = styleSnapshot.shadow
 
-    override fun setDisplay(display: DisplayMode?) { styleSnapshot = styleSnapshot.copy(display = display) }
+    override fun setDisplay(display: DisplayMode?) {
+        styleSnapshot = styleSnapshot.copy(display = display)
+        syncNativeBootstrapAppearance()
+    }
     override fun getDisplay(): DisplayMode? = styleSnapshot.display
 
-    override fun setFlexDirection(direction: FlexDirection?) { styleSnapshot = styleSnapshot.copy(flexDirection = direction) }
+    override fun setFlexDirection(direction: FlexDirection?) {
+        styleSnapshot = styleSnapshot.copy(flexDirection = direction)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFlexDirection(): FlexDirection? = styleSnapshot.flexDirection
 
-    override fun setFlexWrap(wrap: FlexWrap?) { styleSnapshot = styleSnapshot.copy(flexWrap = wrap) }
+    override fun setFlexWrap(wrap: FlexWrap?) {
+        styleSnapshot = styleSnapshot.copy(flexWrap = wrap)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFlexWrap(): FlexWrap? = styleSnapshot.flexWrap
 
-    override fun setJustifyContent(justify: JustifyContent?) { styleSnapshot = styleSnapshot.copy(justifyContent = justify) }
+    override fun setJustifyContent(justify: JustifyContent?) {
+        styleSnapshot = styleSnapshot.copy(justifyContent = justify)
+        syncNativeBootstrapAppearance()
+    }
     override fun getJustifyContent(): JustifyContent? = styleSnapshot.justifyContent
 
-    override fun setAlignItems(align: AlignItems?) { styleSnapshot = styleSnapshot.copy(alignItems = align) }
+    override fun setAlignItems(align: AlignItems?) {
+        styleSnapshot = styleSnapshot.copy(alignItems = align)
+        syncNativeBootstrapAppearance()
+    }
     override fun getAlignItems(): AlignItems? = styleSnapshot.alignItems
 
-    override fun setAlignSelf(align: AlignSelf?) { styleSnapshot = styleSnapshot.copy(alignSelf = align) }
+    override fun setAlignSelf(align: AlignSelf?) {
+        styleSnapshot = styleSnapshot.copy(alignSelf = align)
+        syncNativeBootstrapAppearance()
+    }
     override fun getAlignSelf(): AlignSelf? = styleSnapshot.alignSelf
 
-    override fun setOverflow(overflow: OverflowBehavior?) { styleSnapshot = styleSnapshot.copy(overflow = overflow) }
+    override fun setOverflow(overflow: OverflowBehavior?) {
+        styleSnapshot = styleSnapshot.copy(overflow = overflow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getOverflow(): OverflowBehavior? = styleSnapshot.overflow
 
-    override fun setPosition(position: PositionMode?) { styleSnapshot = styleSnapshot.copy(position = position) }
+    override fun setPosition(position: PositionMode?) {
+        styleSnapshot = styleSnapshot.copy(position = position)
+        syncNativeBootstrapAppearance()
+    }
     override fun getPosition(): PositionMode? = styleSnapshot.position
 
-    override fun setMarginAll(scale: SpacingScale?) { styleSnapshot = styleSnapshot.copy(marginAll = scale) }
+    override fun setMarginAll(scale: SpacingScale?) {
+        styleSnapshot = styleSnapshot.copy(marginAll = scale)
+        syncNativeBootstrapAppearance()
+    }
     override fun getMarginAll(): SpacingScale? = styleSnapshot.marginAll
 
-    override fun setPaddingAll(scale: SpacingScale?) { styleSnapshot = styleSnapshot.copy(paddingAll = scale) }
+    override fun setPaddingAll(scale: SpacingScale?) {
+        styleSnapshot = styleSnapshot.copy(paddingAll = scale)
+        syncNativeBootstrapAppearance()
+    }
     override fun getPaddingAll(): SpacingScale? = styleSnapshot.paddingAll
 
     override fun setVisible(visible: Boolean) {
@@ -207,10 +512,13 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
+        customStyleBackgroundColor = style.backgroundColor
+        customStyleTextColor = style.textColor
         style.backgroundColor?.let {
             nativeWidget.androidView?.setBackgroundColor(it.toArgbInt())
         }
-        style.opacity?.let { setOpacity(it) }
+        style.opacity.let { setOpacity(it) }
+        syncNativeBootstrapAppearance()
     }
 
     override fun supportsNativeTransitions(): Boolean = true

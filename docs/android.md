@@ -5,73 +5,45 @@
 
 ---
 
+## Native Android Control Rendering (`BootstrapType.NONE` Default) & Semantic `BootstrapType` Tinting
+
+1. **`BootstrapType.NONE` Default & Zero Bootstrap CSS Styling**:
+   - Native Android applications **never** use Bootstrap CSS styling.
+   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default) and no inline `ComponentStyle` (`component.getStyle()`) background/border is set, `AndroidBaseNativeImpl` renders the **authentic Android / Material system view** (`MaterialButton`, `AppCompatEditText`, `AppCompatCheckBox`, `SwitchMaterial`, `Slider`) for the active `LIGHT` / `DARK` theme.
+2. **Semantic `BootstrapType` Tinting**:
+   - When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set on `component.getBootstrap().type`, `AndroidBaseNativeImpl` emulates `BootstrapType` by **tinting the native Android `View`** (`backgroundTintList`, stroke color, and text color via `BootstrapColorPalette.resolveColor(type, darkTheme)`), supporting `outline = true/false`.
+   - `component.getStyle().setAccentColor(color)` (`accent-color`) sets `buttonTintList` / `thumbTintList` / `progressTintList` on interactive Android controls.
+   - Unsupported CSS properties and CSS transitions are **silently ignored**.
+3. **Strict User CSS Class Isolation**:
+   - In `AndroidBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the Android `LayoutParams` and view styling engine.
+
+---
+
+## Precompiled `.scss` Stylesheets & `IApplication` Theming (`ThemeMode.AUTO`)
+
+- **Build-Time `.scss` Precompilation**: `.scss` files in `src/commonMain/resources/**` generate `ResourceType.STYLE` (`R.style.<name>`) and precompile via `SassKotlinPrecompiler` into `PrecompiledStyleSheet` objects. When `styles { globalStyleSheet = "styles/main.scss" }` is configured in `build.gradle.kts`, `GenericUiGenerateAndroidActivitiesTask` emits `app.addStyleSheet(...)` inside `GeneratedAndroidApplication.onCreate()`.
+- **System Theme Detection (`ThemeMode.AUTO` Default)**:
+  - `AndroidApplicationImpl` defaults to `ThemeMode.AUTO`, reading `resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK` (`UiModeManager` / `UI_MODE_NIGHT_YES` vs. `UI_MODE_NIGHT_NO`), listening to `onConfigurationChanged`, and calling `AppCompatDelegate.setDefaultNightMode(MODE_NIGHT_FOLLOW_SYSTEM | MODE_NIGHT_YES | MODE_NIGHT_NO)`.
+
+---
+
 ## Generated `AndroidManifest.xml`, 1:1 `AppCompatActivity` Subclasses, & `AndroidLauncher`
 
-Consumer applications write their code strictly in `src/commonMain/kotlin` and `src/commonMain/resources` and configure Android metadata in `build.gradle.kts` via the `genericui` DSL:
-
-```kotlin
-genericui {
-    applicationId = "com.example.myapp"
-    appName = "My App"
-    android {
-        minSdk = 24
-        compileSdk = 34
-        targetSdk = 34
-        manifest {
-            usesPermissions("android.permission.INTERNET", "android.permission.VIBRATE")
-            usesFeatures("android.hardware.camera" to false)
-            metaData("com.example.API_KEY" to "demo")
-        }
-        services {
-            service(
-                name = "com.example.myapp.SyncWorkerService",
-                exported = false,
-                foregroundServiceType = "dataSync"
-            )
-        }
-    }
-}
-```
-
-### Build-Time Code & Manifest Generation (`GenericUiGenerateLaunchersTask`)
-During the build, `GenericUiGenerateLaunchersTask` scans `src/commonMain/kotlin` for `@MainAppFragment` and `@AppFragment` annotations and generates:
-1. **`AndroidManifest.xml`** (`build/generated/genericui/androidManifest/AndroidManifest.xml`):
-   - Declares `<uses-permission>`, `<uses-feature>`, and `<meta-data>` entries from `genericui.android.manifest`.
-   - Registers `GenericUiGeneratedApplication` (`android:name=".GenericUiGeneratedApplication"`).
-   - Declares the `@MainAppFragment`'s generated Activity with `android.intent.action.MAIN` and `android.intent.category.LAUNCHER`.
-   - Declares a separate `<activity>` entry for every `@AppFragment`-annotated class.
-   - Declares `<service>` entries from `genericui.android.services`.
-2. **1:1 `AppCompatActivity` Subclasses** (`build/generated/genericui/launchers/androidMain`):
-   - Every `@MainAppFragment` and `@AppFragment` class receives its own concrete `AppCompatActivity` subclass extending `GenericUiFragmentActivity`:
-     ```kotlin
-     class MainFragmentActivity : GenericUiFragmentActivity() {
-         override val fragmentId: String = "main"
-         override fun createRootFragment(): Fragment = MainFragment()
-     }
-     ```
-3. **`AndroidActivityRegistry` & Intent-Based `launchFragment` Routing**:
-   - `GenericUiGeneratedApplication` extends `GenericUiAndroidApplication` (`com.nexustools.genericui.android.AndroidLauncher`), which initializes the Android runtime in `onCreate()` and registers every `fragmentId -> Activity::class.java` mapping in `AndroidActivityRegistry`.
-   - Calling `AppFragmentLauncher.launchFragment(fragmentId, args, windowConfig)` resolves the target `Activity` class from `AndroidActivityRegistry`, serializes `args: FragmentBundle` into JSON via `PreferenceObjectCodec` under `GenericUiFragmentActivity.EXTRA_FRAGMENT_ARGS`, and starts the new Android `Activity` via `Context.startActivity(intent)`.
-   - Inside `GenericUiFragmentActivity.onCreate()`, the activity deserializes `EXTRA_FRAGMENT_ARGS`, mounts a `FragmentHostFragment` rooted at `createRootFragment()`, and bridges the Android system Back gesture (`OnBackPressedCallback`) to `FragmentHostFragment.popBackStack()`.
+During the build, `GenericUiGenerateLaunchersTask` / `GenericUiGenerateAndroidActivitiesTask` scans `src/commonMain/kotlin` for `@MainAppFragment` and `@AppFragment` annotations and generates:
+1. **`AndroidManifest.xml`**: Declares permissions, features, metadata, `GeneratedAndroidApplication`, the `@MainAppFragment` launcher `<activity>`, a separate `<activity>` for every `@AppFragment`, and `<service>` entries from `genericui { android { manifest { ... } services { ... } } }`.
+2. **1:1 `AppCompatActivity` Subclasses**: Every `@MainAppFragment` and `@AppFragment` receives its own `<FragmentName>Activity : GenericUiFragmentActivity()`.
+3. **`AndroidActivityRegistry` & Intent-Based `launchFragment` Routing**: `GeneratedAndroidApplication` initializes the Android runtime in `onCreate()` and registers every `fragmentId -> Activity::class.java` mapping so `launchFragment(...)` starts the target `Activity` via Android `Intent` with serialized `FragmentBundle` extras.
 
 ---
 
 ## Window Chrome, `TitleCapabilities`, & `AndroidNavbarImpl` (`MaterialToolbar`)
 
 On Android (`AndroidWindowImpl` & `GenericUiFragmentActivity`), `TitleCapabilities` has `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true`:
-- **No `TitleBar` and no `MenuBar` set**: No top bar is mounted (`MaterialToolbar` is omitted from the root vertical `LinearLayout`), giving the fragment's content view 100% of the activity viewport.
-- **`TitleBar` and/or `MenuBar` set**: `GenericUiFragmentActivity` / `AndroidWindowImpl` mounts a top navbar (`MaterialToolbar` / `AndroidNavbarImpl`) at index `0` of the root vertical `LinearLayout`:
-  - Renders the `TitleBar` icon, title, subtitle, and custom leading/center/trailing components (marked `mountedInTitleBar = true` so they are never duplicated in the main content view).
-  - If a `MenuBar` is also present, merges it into the right side of the same top navbar as a dropdown menu button (`☰`) that opens `PopupMenu` submenus for each top-level `MenuItem`.
+- **No `TitleBar` and no `MenuBar` set**: No top bar is mounted (`MaterialToolbar` is omitted).
+- **`TitleBar` and/or `MenuBar` set**: Mounts a top navbar (`MaterialToolbar` / `AndroidNavbarImpl`) with single-placement custom components (`mountedInTitleBar = true`) and a merged right-aligned `MenuBar` dropdown (`☰`).
 
 ---
 
 ## Compiled Android `res/` Resources (`AndroidResourceResolverImpl`)
 
-During the Gradle build, `GenericUiCompileResourcesTask` compiles `src/commonMain/resources/` into standard Android `res/` directories (`res/values/strings.xml`, `res/values-<lang>/strings.xml`, `res/values/colors.xml`, `res/values/dimens.xml`, `res/drawable/*`, `res/raw/*`, `res/font/*`).
-
-At runtime, `AndroidResourceResolverImpl` (`com.nexustools.genericui.android.system.AndroidResourceResolverImpl`) resolves resources directly through Android's `Context.resources`:
-- `Resources.getIdentifier(name, defType, packageName)`
-- `Resources.getString(resId)` (automatically honoring the active Android `Configuration` locale)
-- `ContextCompat.getColor(context, resId)` and `Resources.getDimension(resId)`
-- `Resources.openRawResource(resId)` and `android.resource://<packageName>/<resId>` URIs.
+During the Gradle build, `GenericUiCompileResourcesTask` compiles `src/commonMain/resources/` into standard Android `res/` directories, resolved at runtime by `AndroidResourceResolverImpl` via `Context.resources`.

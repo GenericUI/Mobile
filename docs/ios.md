@@ -27,7 +27,23 @@ object GeneratedIosMain {
 }
 ```
 
-`IosLauncher` (`com.nexustools.genericui.ios.IosLauncher`) runs `IosNativeBootstrap.ensureInstalled()`, mounts a `FragmentHostFragment` inside the root `UIViewController`, and handles `AppFragmentLauncher.launchFragment(...)` by presenting or pushing a new `UIViewController` hosting the target `@AppFragment`.
+When `styles { globalStyleSheet = "styles/main.scss" }` is configured in `build.gradle.kts`, the generated startup code automatically attaches the precompiled `PrecompiledStyleSheet` via `app.addStyleSheet(...)`.
+
+---
+
+## Native UIKit Control Rendering (`BootstrapType.NONE` Default) & Semantic `BootstrapType` Tinting
+
+1. **`BootstrapType.NONE` Default & Zero Bootstrap CSS Styling**:
+   - Native iOS applications **never** use Bootstrap CSS styling.
+   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default) and no inline `ComponentStyle` (`component.getStyle()`) background/border is set, `IosBaseNativeImpl` renders the **authentic UIKit system control** (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UISegmentedControl`) for the active `LIGHT` / `DARK` `UITraitCollection`.
+2. **Semantic `BootstrapType` Tinting**:
+   - When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set on `component.getBootstrap().type`, `IosBaseNativeImpl` emulates `BootstrapType` by **tinting the native `UIView` / `UIControl`** (`backgroundColor`, `tintColor`, `layer.borderColor` via `BootstrapColorPalette.resolveColor(type, darkTheme)`), supporting `outline = true/false`.
+   - `component.getStyle().setAccentColor(color)` (`accent-color`) sets `onTintColor` / `minimumTrackTintColor` / `tintColor` on UIKit controls.
+   - Unsupported CSS properties and CSS transitions are **silently ignored**.
+3. **Strict User CSS Class Isolation**:
+   - In `IosBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the UIKit layout and rendering engine.
+4. **`IApplication` Theming (`ThemeMode.AUTO`, `DARK`, `LIGHT`)**:
+   - Defaults to `ThemeMode.AUTO`, reading `UITraitCollection.currentTraitCollection.userInterfaceStyle` (`UIUserInterfaceStyleDark` vs. `UIUserInterfaceStyleLight`), observing `traitCollectionDidChange:`, and updating `UIWindow.overrideUserInterfaceStyle`.
 
 ---
 
@@ -35,12 +51,10 @@ object GeneratedIosMain {
 
 On iOS (`IosWindowImpl`), `TitleCapabilities` reports `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true`:
 - **Neither `TitleBar` nor `MenuBar` set**: No top navigation bar is rendered, allowing the fragment's content `UIView` to occupy the full safe-area layout guide.
-- **`TitleBar` and/or `MenuBar` set**: Renders a single top navigation bar (`IosNavbarImpl` / `UINavigationBar` header container) containing the icon, title, subtitle, custom leading/center/trailing `UIView` items (marked `mountedInTitleBar = true` so they are never duplicated in the body container), and a right-aligned menu button (`☰`) when a `MenuBar` is attached.
+- **`TitleBar` and/or `MenuBar` set**: Renders a single top navigation bar (`IosNavbarImpl` / `UINavigationBar` header container) with single-placement custom `UIView` items (`mountedInTitleBar = true`) and a right-aligned menu button (`☰`) when a `MenuBar` is attached.
 
 ---
 
 ## Apple `NSBundle` Resources (`IosResourceResolverImpl`)
 
-During the Gradle build, `GenericUiCompileResourcesTask` compiles `src/commonMain/resources/` into Apple bundle resources (`.lproj/Localizable.strings`, asset catalogs, raw files, and fonts).
-
-At runtime, `IosResourceResolverImpl` (`com.nexustools.genericui.ios.system.IosResourceResolverImpl`) resolves localized strings, colors, dimensions, `file://` URLs, and byte arrays via `NSBundle.mainBundle`.
+During the Gradle build, `GenericUiCompileResourcesTask` compiles `src/commonMain/resources/` into Apple bundle resources, resolved at runtime by `IosResourceResolverImpl` via `NSBundle.mainBundle`.

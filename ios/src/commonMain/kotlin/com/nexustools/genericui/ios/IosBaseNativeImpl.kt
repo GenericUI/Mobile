@@ -2,6 +2,7 @@ package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.*
+import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.event.KeyEvent
 import com.nexustools.genericui.event.PointerEvent
 import com.nexustools.genericui.event.WheelEvent
@@ -9,16 +10,26 @@ import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.mobile.gesture.MobileGestureRecognizer
+import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
+import com.nexustools.genericui.style.color.BootstrapColorPalette
+import com.nexustools.genericui.style.color.RgbaColor
+import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssCursorValue
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
+import com.nexustools.genericui.style.theme.SystemThemeDetector
 import com.nexustools.genericui.style.transition.CssTransitionSpec
+import kotlin.math.roundToInt
 
 /**
  * Base [NativeImpl] for the `:ios` UIKit backend.
  *
- * Handles Bootstrap 5 style Enums directly in strongly-typed fields (`styleSnapshot`) for zero-string-parsing
- * efficiency, synthesizing `getClass()` and parsing `setClass()` via [BootstrapClassMapper].
+ * Isolates user custom CSS classes from Bootstrap Enum state (`styleSnapshot`), maps semantic
+ * [BootstrapType] values (`DANGER`, `PRIMARY`, `SUCCESS`, etc.) to native `UIColor` tints while
+ * keeping [BootstrapType.NONE] / `null` in the default iOS system control appearance, and translates
+ * [ComponentBootstrap] and [ComponentStyle] properties to `UIView` / `CALayer` state.
  */
 open class IosBaseNativeImpl(
     uiViewClassName: String = "UIView",
@@ -31,6 +42,9 @@ open class IosBaseNativeImpl(
 
     protected var styleSnapshot: BootstrapStyleSnapshot =
         BootstrapStyleSnapshot(componentPrefix = componentClassPrefix)
+    protected var bootstrapState: ComponentBootstrap? = null
+    protected var customStyleBackgroundColor: RgbaColor? = null
+    protected var customStyleTextColor: RgbaColor? = null
 
     private var tooltipTextValue: String? = null
     private var preferredSizeValue: Size? = null
@@ -48,6 +62,7 @@ open class IosBaseNativeImpl(
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
 
     init {
+        syncNativeBootstrapAppearance()
         gestureRecognizer.onLongPress = { x, y ->
             nativeWidget.metadata["lastContextMenuEvent"] = "$x,$y"
             onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2))
@@ -55,89 +70,389 @@ open class IosBaseNativeImpl(
     }
 
     override fun setClass(className: String) {
-        styleSnapshot = BootstrapClassMapper.fromClassString(className, componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
+        styleSnapshot = styleSnapshot.copy(customClasses = tokens)
+        nativeWidget.metadata["userClasses"] = tokens.joinToString(" ")
     }
 
     override fun getClass(): String =
-        BootstrapClassMapper.toClassString(styleSnapshot)
+        styleSnapshot.customClasses.joinToString(" ")
+
+    override fun getClasses(): Set<String> =
+        styleSnapshot.customClasses.toSet()
 
     override fun addClass(className: String) {
-        val combined = (getClass() + " " + className).trim()
-        styleSnapshot = BootstrapClassMapper.fromClassString(combined, componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return
+        val updated = LinkedHashSet(styleSnapshot.customClasses)
+        updated.addAll(tokens)
+        styleSnapshot = styleSnapshot.copy(customClasses = updated)
+        nativeWidget.metadata["userClasses"] = updated.joinToString(" ")
     }
 
     override fun removeClass(className: String) {
-        val remaining = getClass().split(Regex("\\s+")).filter { it.isNotEmpty() && it != className }
-        styleSnapshot = BootstrapClassMapper.fromClassString(remaining.joinToString(" "), componentClassPrefix)
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return
+        val updated = LinkedHashSet(styleSnapshot.customClasses)
+        updated.removeAll(tokens.toSet())
+        styleSnapshot = styleSnapshot.copy(customClasses = updated)
+        nativeWidget.metadata["userClasses"] = updated.joinToString(" ")
     }
 
-    override fun hasClass(className: String): Boolean =
-        BootstrapClassMapper.toClassTokens(styleSnapshot).contains(className.trim())
+    override fun hasClass(className: String): Boolean {
+        val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return false
+        return styleSnapshot.customClasses.containsAll(tokens)
+    }
 
-    override fun setType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(type = type) }
+    protected open fun syncNativeBootstrapAppearance() {
+        val normalizedSnapshot = styleSnapshot.copy(type = styleSnapshot.type?.takeIf { it != BootstrapType.NONE })
+        val enumClasses = BootstrapClassMapper.toEnumClassSet(normalizedSnapshot).filterNot { it.endsWith("-") }
+        nativeWidget.metadata["enumClasses"] = enumClasses.joinToString(" ")
+
+        val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val effectiveType = styleSnapshot.type?.takeIf { it != BootstrapType.NONE } ?: styleSnapshot.backgroundType
+        val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
+        val fgColor = customStyleTextColor
+            ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+            ?: styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
+                BootstrapColorPalette.resolveForegroundOn(it)
+            }
+
+        if (tintColor == null) {
+            nativeWidget.metadata["useSystemControlAppearance"] = "true"
+            nativeWidget.metadata.remove("bootstrapTintColor")
+            nativeWidget.backgroundColor = null
+        } else {
+            nativeWidget.metadata["useSystemControlAppearance"] = "false"
+            nativeWidget.metadata["bootstrapTintColor"] = tintColor.toCssHex()
+            nativeWidget.backgroundColor = tintColor
+        }
+
+        if (fgColor != null) {
+            nativeWidget.metadata["bootstrapForegroundColor"] = fgColor.toCssHex()
+            nativeWidget.tintColor = fgColor
+        } else {
+            nativeWidget.metadata.remove("bootstrapForegroundColor")
+            nativeWidget.tintColor = null
+        }
+
+        when (val w = styleSnapshot.width) {
+            BootstrapWidth.W_100 -> nativeWidget.metadata["layoutWidth"] = "100%"
+            BootstrapWidth.W_AUTO -> nativeWidget.metadata["layoutWidth"] = "auto"
+            null -> nativeWidget.metadata.remove("layoutWidth")
+            else -> nativeWidget.metadata["layoutWidth"] = "${w.percentage}%"
+        }
+
+        when (val h = styleSnapshot.height) {
+            BootstrapHeight.H_100 -> nativeWidget.metadata["layoutHeight"] = "100%"
+            BootstrapHeight.H_AUTO -> nativeWidget.metadata["layoutHeight"] = "auto"
+            null -> nativeWidget.metadata.remove("layoutHeight")
+            else -> nativeWidget.metadata["layoutHeight"] = "${h.percentage}%"
+        }
+
+        styleSnapshot.opacity?.let { op ->
+            setOpacity(op.alpha)
+        }
+
+        styleSnapshot.visibility?.let { vis ->
+            nativeWidget.isHidden = !vis.visible
+        }
+        if (styleSnapshot.display == DisplayMode.NONE) {
+            nativeWidget.isHidden = true
+        }
+
+        styleSnapshot.borderRadius?.let { br ->
+            val radiusPt = when (br) {
+                BorderRadiusStyle.NONE -> 0f
+                BorderRadiusStyle.SMALL -> 4f
+                BorderRadiusStyle.DEFAULT -> 6f
+                BorderRadiusStyle.LARGE -> 8f
+                BorderRadiusStyle.XL -> 12f
+                BorderRadiusStyle.XXL -> 16f
+                BorderRadiusStyle.PILL -> 999f
+                BorderRadiusStyle.CIRCLE -> 999f
+            }
+            nativeWidget.cornerRadius = radiusPt
+            nativeWidget.metadata["cornerRadiusPt"] = radiusPt.toString()
+        }
+
+        styleSnapshot.shadow?.let { sh ->
+            val radiusPt = when (sh) {
+                ShadowElevation.NONE -> 0f
+                ShadowElevation.SMALL -> 2f
+                ShadowElevation.DEFAULT -> 6f
+                ShadowElevation.LARGE -> 16f
+            }
+            nativeWidget.metadata["shadowRadiusPt"] = radiusPt.toString()
+        }
+
+        styleSnapshot.borderWidth?.let { bw ->
+            nativeWidget.borderWidth = bw.scale.toFloat()
+            nativeWidget.metadata["borderWidthPt"] = bw.scale.toString()
+        }
+
+        val padAll = spacingScaleToPt(styleSnapshot.paddingAll)
+        val padX = spacingScaleToPt(styleSnapshot.paddingX)
+        val padY = spacingScaleToPt(styleSnapshot.paddingY)
+        val padTop = spacingScaleToPt(styleSnapshot.paddingTop) ?: padY ?: padAll
+        val padBottom = spacingScaleToPt(styleSnapshot.paddingBottom) ?: padY ?: padAll
+        val padStart = spacingScaleToPt(styleSnapshot.paddingStart) ?: padX ?: padAll
+        val padEnd = spacingScaleToPt(styleSnapshot.paddingEnd) ?: padX ?: padAll
+        if (padTop != null || padBottom != null || padStart != null || padEnd != null) {
+            setPadding(EdgeInsets(padTop ?: 0, padEnd ?: 0, padBottom ?: 0, padStart ?: 0))
+        }
+
+        val marAll = spacingScaleToPt(styleSnapshot.marginAll)
+        val marX = spacingScaleToPt(styleSnapshot.marginX)
+        val marY = spacingScaleToPt(styleSnapshot.marginY)
+        val marTop = spacingScaleToPt(styleSnapshot.marginTop) ?: marY ?: marAll
+        val marBottom = spacingScaleToPt(styleSnapshot.marginBottom) ?: marY ?: marAll
+        val marStart = spacingScaleToPt(styleSnapshot.marginStart) ?: marX ?: marAll
+        val marEnd = spacingScaleToPt(styleSnapshot.marginEnd) ?: marX ?: marAll
+        if (marTop != null || marBottom != null || marStart != null || marEnd != null) {
+            setMargin(EdgeInsets(marTop ?: 0, marEnd ?: 0, marBottom ?: 0, marStart ?: 0))
+        }
+    }
+
+    private fun spacingScaleToPt(scale: SpacingScale?): Int? = when (scale) {
+        SpacingScale.S0 -> 0
+        SpacingScale.S1 -> 4
+        SpacingScale.S2 -> 8
+        SpacingScale.S3 -> 16
+        SpacingScale.S4 -> 24
+        SpacingScale.S5 -> 48
+        SpacingScale.AUTO -> 0
+        null -> null
+    }
+
+    override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
+        bootstrapState = bootstrap
+        styleSnapshot = bootstrap.applyToSnapshot(styleSnapshot)
+        syncNativeBootstrapAppearance()
+    }
+
+    override fun applyComponentStyle(style: ComponentStyle) {
+        customStyleBackgroundColor = style.backgroundColor
+        customStyleTextColor = style.color
+
+        syncNativeBootstrapAppearance()
+
+        val radiusPt = cssLengthToFloatPt(style.borderRadius)
+        if (radiusPt != null) {
+            nativeWidget.cornerRadius = radiusPt
+            nativeWidget.metadata["cornerRadiusPt"] = radiusPt.toString()
+        } else if (styleSnapshot.borderRadius == null) {
+            nativeWidget.cornerRadius = 0f
+            nativeWidget.metadata.remove("cornerRadiusPt")
+        }
+
+        val borderWidthPt = cssLengthToFloatPt(style.borderWidth)
+        if (borderWidthPt != null) {
+            nativeWidget.borderWidth = borderWidthPt
+            nativeWidget.metadata["borderWidthPt"] = borderWidthPt.toString()
+        } else if (styleSnapshot.borderWidth == null) {
+            nativeWidget.borderWidth = 0f
+            nativeWidget.metadata.remove("borderWidthPt")
+        }
+
+        style.borderColor?.let {
+            nativeWidget.metadata["borderColor"] = it.toCssHex()
+        } ?: nativeWidget.metadata.remove("borderColor")
+
+        if (style.opacity != null) {
+            setOpacity(style.opacity!!)
+        } else if (styleSnapshot.opacity == null) {
+            setOpacity(1.0f)
+        }
+
+        val wPt = cssLengthToIntPt(style.width)
+        val hPt = cssLengthToIntPt(style.height)
+        if (wPt != null || hPt != null) {
+            val cur = nativeWidget.frame
+            nativeWidget.frame = Rect(cur.x, cur.y, wPt ?: cur.width, hPt ?: cur.height)
+        }
+
+        val padAll = cssLengthToIntPt(style.padding)
+        val padTop = cssLengthToIntPt(style.paddingTop) ?: padAll
+        val padRight = cssLengthToIntPt(style.paddingRight) ?: padAll
+        val padBottom = cssLengthToIntPt(style.paddingBottom) ?: padAll
+        val padLeft = cssLengthToIntPt(style.paddingLeft) ?: padAll
+        if (padTop != null || padRight != null || padBottom != null || padLeft != null) {
+            setPadding(EdgeInsets(padTop ?: 0, padRight ?: 0, padBottom ?: 0, padLeft ?: 0))
+        }
+
+        val marAll = cssLengthToIntPt(style.margin)
+        val marTop = cssLengthToIntPt(style.marginTop) ?: marAll
+        val marRight = cssLengthToIntPt(style.marginRight) ?: marAll
+        val marBottom = cssLengthToIntPt(style.marginBottom) ?: marAll
+        val marLeft = cssLengthToIntPt(style.marginLeft) ?: marAll
+        if (marTop != null || marRight != null || marBottom != null || marLeft != null) {
+            setMargin(EdgeInsets(marTop ?: 0, marRight ?: 0, marBottom ?: 0, marLeft ?: 0))
+        }
+
+        when {
+            style.display == DisplayMode.NONE || style.visibility == BootstrapVisibility.INVISIBLE -> {
+                nativeWidget.isHidden = true
+            }
+            style.display != null || style.visibility == BootstrapVisibility.VISIBLE -> {
+                nativeWidget.isHidden = false
+            }
+        }
+
+        for ((k, pair) in style.toCssPropertyMap()) {
+            if (k == "cursor") continue
+            nativeWidget.metadata["style:$k"] = pair.first
+        }
+    }
+
+    override fun setCustomCursor(cursor: CssCursorValue?) {
+        // Touch-first mobile OS: cursor styling is a no-op on iOS.
+    }
+
+    private fun cssLengthToFloatPt(length: CssLength?): Float? = when (length) {
+        is CssLength.Px -> length.value
+        is CssLength.Rem -> length.value * 16f
+        is CssLength.Em -> length.value * 16f
+        is CssLength.Percent -> length.value
+        is CssLength.Vw -> length.value
+        is CssLength.Vh -> length.value
+        CssLength.Auto, null -> null
+    }
+
+    private fun cssLengthToIntPt(length: CssLength?): Int? =
+        cssLengthToFloatPt(length)?.roundToInt()
+
+    override fun setType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(type = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getType(): BootstrapType? = styleSnapshot.type
 
-    override fun setOutline(outline: Boolean) { styleSnapshot = styleSnapshot.copy(outline = outline) }
+    override fun setOutline(outline: Boolean) {
+        styleSnapshot = styleSnapshot.copy(outline = outline)
+        syncNativeBootstrapAppearance()
+    }
     override fun isOutline(): Boolean = styleSnapshot.outline
 
-    override fun setSize(size: BootstrapSize?) { styleSnapshot = styleSnapshot.copy(size = size) }
+    override fun setSize(size: BootstrapSize?) {
+        styleSnapshot = styleSnapshot.copy(size = size)
+        syncNativeBootstrapAppearance()
+    }
     override fun getSize(): BootstrapSize? = styleSnapshot.size
 
-    override fun setBackgroundType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(backgroundType = type) }
+    override fun setBackgroundType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(backgroundType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBackgroundType(): BootstrapType? = styleSnapshot.backgroundType
 
-    override fun setTextColorType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(textColorType = type) }
+    override fun setTextColorType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(textColorType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextColorType(): BootstrapType? = styleSnapshot.textColorType
 
-    override fun setBorderType(type: BootstrapType?) { styleSnapshot = styleSnapshot.copy(borderType = type) }
+    override fun setBorderType(type: BootstrapType?) {
+        styleSnapshot = styleSnapshot.copy(borderType = type)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBorderType(): BootstrapType? = styleSnapshot.borderType
 
-    override fun setTextAlignment(alignment: TextAlignment?) { styleSnapshot = styleSnapshot.copy(textAlignment = alignment) }
+    override fun setTextAlignment(alignment: TextAlignment?) {
+        styleSnapshot = styleSnapshot.copy(textAlignment = alignment)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextAlignment(): TextAlignment? = styleSnapshot.textAlignment
 
-    override fun setFontWeight(weight: FontWeight?) { styleSnapshot = styleSnapshot.copy(fontWeight = weight) }
+    override fun setFontWeight(weight: FontWeight?) {
+        styleSnapshot = styleSnapshot.copy(fontWeight = weight)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFontWeight(): FontWeight? = styleSnapshot.fontWeight
 
-    override fun setTextTransform(transform: TextTransform?) { styleSnapshot = styleSnapshot.copy(textTransform = transform) }
+    override fun setTextTransform(transform: TextTransform?) {
+        styleSnapshot = styleSnapshot.copy(textTransform = transform)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextTransform(): TextTransform? = styleSnapshot.textTransform
 
-    override fun setTextOverflow(overflow: TextOverflow?) { styleSnapshot = styleSnapshot.copy(textOverflow = overflow) }
+    override fun setTextOverflow(overflow: TextOverflow?) {
+        styleSnapshot = styleSnapshot.copy(textOverflow = overflow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getTextOverflow(): TextOverflow? = styleSnapshot.textOverflow
 
-    override fun setBorderRadius(radius: BorderRadiusStyle?) { styleSnapshot = styleSnapshot.copy(borderRadius = radius) }
+    override fun setBorderRadius(radius: BorderRadiusStyle?) {
+        styleSnapshot = styleSnapshot.copy(borderRadius = radius)
+        syncNativeBootstrapAppearance()
+    }
     override fun getBorderRadius(): BorderRadiusStyle? = styleSnapshot.borderRadius
 
-    override fun setShadow(shadow: ShadowElevation?) { styleSnapshot = styleSnapshot.copy(shadow = shadow) }
+    override fun setShadow(shadow: ShadowElevation?) {
+        styleSnapshot = styleSnapshot.copy(shadow = shadow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getShadow(): ShadowElevation? = styleSnapshot.shadow
 
-    override fun setDisplay(display: DisplayMode?) { styleSnapshot = styleSnapshot.copy(display = display) }
+    override fun setDisplay(display: DisplayMode?) {
+        styleSnapshot = styleSnapshot.copy(display = display)
+        syncNativeBootstrapAppearance()
+    }
     override fun getDisplay(): DisplayMode? = styleSnapshot.display
 
-    override fun setFlexDirection(direction: FlexDirection?) { styleSnapshot = styleSnapshot.copy(flexDirection = direction) }
+    override fun setFlexDirection(direction: FlexDirection?) {
+        styleSnapshot = styleSnapshot.copy(flexDirection = direction)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFlexDirection(): FlexDirection? = styleSnapshot.flexDirection
 
-    override fun setFlexWrap(wrap: FlexWrap?) { styleSnapshot = styleSnapshot.copy(flexWrap = wrap) }
+    override fun setFlexWrap(wrap: FlexWrap?) {
+        styleSnapshot = styleSnapshot.copy(flexWrap = wrap)
+        syncNativeBootstrapAppearance()
+    }
     override fun getFlexWrap(): FlexWrap? = styleSnapshot.flexWrap
 
-    override fun setJustifyContent(justify: JustifyContent?) { styleSnapshot = styleSnapshot.copy(justifyContent = justify) }
+    override fun setJustifyContent(justify: JustifyContent?) {
+        styleSnapshot = styleSnapshot.copy(justifyContent = justify)
+        syncNativeBootstrapAppearance()
+    }
     override fun getJustifyContent(): JustifyContent? = styleSnapshot.justifyContent
 
-    override fun setAlignItems(align: AlignItems?) { styleSnapshot = styleSnapshot.copy(alignItems = align) }
+    override fun setAlignItems(align: AlignItems?) {
+        styleSnapshot = styleSnapshot.copy(alignItems = align)
+        syncNativeBootstrapAppearance()
+    }
     override fun getAlignItems(): AlignItems? = styleSnapshot.alignItems
 
-    override fun setAlignSelf(align: AlignSelf?) { styleSnapshot = styleSnapshot.copy(alignSelf = align) }
+    override fun setAlignSelf(align: AlignSelf?) {
+        styleSnapshot = styleSnapshot.copy(alignSelf = align)
+        syncNativeBootstrapAppearance()
+    }
     override fun getAlignSelf(): AlignSelf? = styleSnapshot.alignSelf
 
-    override fun setOverflow(overflow: OverflowBehavior?) { styleSnapshot = styleSnapshot.copy(overflow = overflow) }
+    override fun setOverflow(overflow: OverflowBehavior?) {
+        styleSnapshot = styleSnapshot.copy(overflow = overflow)
+        syncNativeBootstrapAppearance()
+    }
     override fun getOverflow(): OverflowBehavior? = styleSnapshot.overflow
 
-    override fun setPosition(position: PositionMode?) { styleSnapshot = styleSnapshot.copy(position = position) }
+    override fun setPosition(position: PositionMode?) {
+        styleSnapshot = styleSnapshot.copy(position = position)
+        syncNativeBootstrapAppearance()
+    }
     override fun getPosition(): PositionMode? = styleSnapshot.position
 
-    override fun setMarginAll(scale: SpacingScale?) { styleSnapshot = styleSnapshot.copy(marginAll = scale) }
+    override fun setMarginAll(scale: SpacingScale?) {
+        styleSnapshot = styleSnapshot.copy(marginAll = scale)
+        syncNativeBootstrapAppearance()
+    }
     override fun getMarginAll(): SpacingScale? = styleSnapshot.marginAll
 
-    override fun setPaddingAll(scale: SpacingScale?) { styleSnapshot = styleSnapshot.copy(paddingAll = scale) }
+    override fun setPaddingAll(scale: SpacingScale?) {
+        styleSnapshot = styleSnapshot.copy(paddingAll = scale)
+        syncNativeBootstrapAppearance()
+    }
     override fun getPaddingAll(): SpacingScale? = styleSnapshot.paddingAll
 
     override fun setVisible(visible: Boolean) {
@@ -186,7 +501,7 @@ open class IosBaseNativeImpl(
         style.textColor?.let { nativeWidget.tintColor = it }
         style.borderRadiusPx?.let { nativeWidget.cornerRadius = it }
         style.borderWidthPx?.let { nativeWidget.borderWidth = it }
-        style.opacity?.let { setOpacity(it) }
+        style.opacity.let { setOpacity(it) }
     }
 
     override fun supportsNativeTransitions(): Boolean = true

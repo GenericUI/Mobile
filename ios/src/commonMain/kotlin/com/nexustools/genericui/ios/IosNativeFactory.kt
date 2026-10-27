@@ -47,6 +47,7 @@ class IosNativeFactory : NativeFactory {
 
     init {
         ImageLoader.activeNativeCodec = IosImageIoCodecImpl()
+        IosApplicationImpl.installSystemThemeHooks()
     }
 
     // Shell & Window
