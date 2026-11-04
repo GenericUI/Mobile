@@ -35,7 +35,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             addChildNative(tabImpl, index)
             addChildNative(contentImpl, index)
         }
-        nativeWidget.metadata["tabTitles"] = tabTitles.joinToString("|")
+        nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
     }
 
     override fun addTabNative(title: String, contentImpl: NativeImpl<*>, index: Int) {
@@ -50,14 +50,14 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             tabContents.add(index, contentImpl)
             addChildNative(contentImpl, index)
         }
-        nativeWidget.metadata["tabTitles"] = tabTitles.joinToString("|")
+        nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
     }
 
     override fun updateTabNative(index: Int, tabImpl: TabNativeImpl<*>) {
         if (index in tabImpls.indices) {
             tabImpls[index] = tabImpl
             (tabImpl as? AndroidTabImpl)?.let { tabTitles[index] = it.titleVal }
-            nativeWidget.metadata["tabTitles"] = tabTitles.joinToString("|")
+            nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
         }
     }
 
@@ -69,23 +69,23 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         val removedContent = tabContents.removeAt(index)
         removeChildNative(removedContent)
         selectedIndexVal = selectedIndexVal.coerceIn(0, (tabTitles.size - 1).coerceAtLeast(0))
-        nativeWidget.metadata["tabTitles"] = tabTitles.joinToString("|")
+        nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
     }
 
     override fun setTabTitleNative(index: Int, title: String) {
         if (index in tabTitles.indices) {
             tabTitles[index] = title
             tabImpls[index]?.setTitleNative(title)
-            nativeWidget.metadata["tabTitles"] = tabTitles.joinToString("|")
+            nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
         }
     }
 
     override fun setTabPositionNative(position: TabPosition) {
-        nativeWidget.metadata["tabPosition"] = position.name
+        nativeWidget.attributes["tabPosition"] = position.name
     }
 
     override fun setTabBarStyleNative(style: TabBarStyle) {
-        nativeWidget.metadata["tabBarStyle"] = style.name
+        nativeWidget.attributes["tabBarStyle"] = style.name
     }
 
     override fun setSelectedTabIndex(index: Int, fadeTransition: Boolean) {

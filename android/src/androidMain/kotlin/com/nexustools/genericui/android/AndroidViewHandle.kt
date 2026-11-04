@@ -28,20 +28,6 @@ class AndroidViewHandle(
     var scrollY: Int = 0
     val classes: MutableSet<String> = linkedSetOf()
     val attributes: MutableMap<String, String> = linkedMapOf()
-    val metadata: MutableMap<String, String>
-        get() = attributes
-
-    var visibility: Boolean
-        get() = visible
-        set(value) { visible = value }
-
-    var contentDescription: String
-        get() = tagId
-        set(value) { tagId = value }
-
-    fun addChildAt(child: AndroidViewHandle, index: Int) {
-        addChild(child, index)
-    }
 
     var parentHandle: AndroidViewHandle? = null
         private set

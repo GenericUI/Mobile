@@ -16,7 +16,7 @@ class AndroidPopoverImpl : AndroidBaseContainerNativeImpl("android.widget.PopupW
 
     override fun setPlacement(placement: Placement) {
         this.placement = placement
-        nativeWidget.metadata["placement"] = placement.name.lowercase()
+        nativeWidget.attributes["placement"] = placement.name.lowercase()
     }
 
     override fun showAnchored(anchor: NativeImpl<*>?, x: Int, y: Int) {

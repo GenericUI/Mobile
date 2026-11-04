@@ -7,11 +7,11 @@ import com.nexustools.genericui.nativeimpl.content.TableNativeImpl
  */
 class AndroidTableImpl : AndroidBaseContainerNativeImpl("android.widget.TableLayout", "table"), TableNativeImpl<AndroidViewHandle> {
     override fun setHeaders(headers: List<String>) {
-        nativeWidget.metadata["headers"] = headers.joinToString("|")
+        nativeWidget.attributes["headers"] = headers.joinToString("|")
     }
 
     override fun setRows(rows: List<List<String>>) {
-        nativeWidget.metadata["rowCount"] = rows.size.toString()
+        nativeWidget.attributes["rowCount"] = rows.size.toString()
     }
 
     override fun setStriped(striped: Boolean) {

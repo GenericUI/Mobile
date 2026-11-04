@@ -15,7 +15,7 @@ import com.nexustools.genericui.style.theme.SystemThemeDetector
  * (`DANGER`, `PRIMARY`, `SUCCESS`, etc.) is set, configures `UIButton.Configuration.filled()`
  * (or `.bordered()` when `outline == true`) with the semantic color palette.
  */
-class IosButtonImpl(
+open class IosButtonImpl(
     classPrefix: String = "btn"
 ) : IosBaseNativeImpl("UIButton", classPrefix), ButtonNativeImpl<IosNativeView> {
     private var iconName: String? = null
@@ -46,16 +46,17 @@ class IosButtonImpl(
                 btnType?.let { BootstrapColorPalette.resolveForegroundOn(it) } ?: BootstrapColorPalette.resolveForegroundOn(BootstrapType.PRIMARY)
             }
             nativeWidget.metadata["uiButtonConfiguration"] = if (styleSnapshot.outline) "bordered" else "filled"
-            nativeWidget.metadata["baseBackgroundColor"] = tintColor.toCssHex()
-            nativeWidget.metadata["baseForegroundColor"] = fgColor.toCssHex()
+            nativeWidget.metadata["baseBackgroundColor"] = tintColor.toHex()
+            nativeWidget.metadata["baseForegroundColor"] = fgColor.toHex()
             nativeWidget.backgroundColor = if (styleSnapshot.outline) null else tintColor
             nativeWidget.tintColor = fgColor
         }
 
         when (styleSnapshot.size) {
-            BootstrapSize.SM -> nativeWidget.metadata["uiButtonControlSize"] = "small"
-            BootstrapSize.LG -> nativeWidget.metadata["uiButtonControlSize"] = "large"
-            BootstrapSize.MD, null -> nativeWidget.metadata["uiButtonControlSize"] = "medium"
+            BootstrapSize.EXTRA_SMALL, BootstrapSize.SMALL -> nativeWidget.metadata["uiButtonControlSize"] = "small"
+            BootstrapSize.LARGE, BootstrapSize.EXTRA_LARGE, BootstrapSize.EXTRA_EXTRA_LARGE ->
+                nativeWidget.metadata["uiButtonControlSize"] = "large"
+            BootstrapSize.MEDIUM, null -> nativeWidget.metadata["uiButtonControlSize"] = "medium"
         }
     }
 }

@@ -27,6 +27,8 @@ kotlin {
             api(libs.androidx.recyclerview)
             api(libs.google.material)
             api(libs.kotlinx.coroutinesAndroid)
+            implementation(libs.androidx.sqlite)
+            implementation(libs.androidx.sqlite.ktx)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

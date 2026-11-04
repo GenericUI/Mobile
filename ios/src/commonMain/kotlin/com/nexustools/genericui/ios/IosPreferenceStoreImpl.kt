@@ -21,7 +21,7 @@ class IosPreferenceStoreImpl(
 
     val configDir: ConfigDirectory = ConfigDirectory(
         appName = appName,
-        nativeImplOverride = IosUserDirectoryNativeImpl(appName = appName, isCache = false)
+        factory = IosNativeFactory()
     )
 
     val configDirectory: String

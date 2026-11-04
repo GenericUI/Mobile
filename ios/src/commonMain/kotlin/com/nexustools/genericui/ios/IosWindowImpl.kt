@@ -112,14 +112,32 @@ class IosWindowImpl : IosBaseContainerNativeImpl("UIWindow", "window"), WindowNa
 
     override fun getWindowState(): WindowState = windowState
 
+    private var fullscreenElementImpl: NativeImpl<*>? = null
+
     override fun setFullscreen(fullscreen: Boolean, cutoutMode: DisplayCutoutMode) {
         fullscreenFlag = fullscreen
+        if (!fullscreen) {
+            fullscreenElementImpl = null
+            nativeWidget.metadata.remove("fullscreenElement")
+        }
         nativeWidget.metadata["prefersStatusBarHidden"] = fullscreen.toString()
         nativeWidget.metadata["prefersHomeIndicatorAutoHidden"] = fullscreen.toString()
         rebuildMobileMenuBarNavbar()
     }
 
     override fun isFullscreen(): Boolean = fullscreenFlag
+
+    override fun setFullscreenElement(elementImpl: NativeImpl<*>?, cutoutMode: DisplayCutoutMode) {
+        fullscreenElementImpl = elementImpl
+        if (elementImpl != null) {
+            nativeWidget.metadata["fullscreenElement"] = elementImpl.nativeWidget.toString()
+        } else {
+            nativeWidget.metadata.remove("fullscreenElement")
+        }
+        setFullscreen(elementImpl != null, cutoutMode)
+    }
+
+    override fun getFullscreenElement(): NativeImpl<*>? = fullscreenElementImpl
 
     override fun applyTitleBarInstructions(titleBar: TitleBar?) {
         if (this.titleBarInstructions != titleBar) {

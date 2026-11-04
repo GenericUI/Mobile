@@ -1,14 +1,16 @@
 package com.nexustools.genericui.mobile.layout
 
 import com.nexustools.genericui.component.fragment.Fragment
-import com.nexustools.genericui.component.fragment.helper.AdaptiveSplitTabFragment
+import com.nexustools.genericui.component.fragment.helper.HybridColumnFragment
+import com.nexustools.genericui.component.layout.HybridFullscreenPolicy
+import com.nexustools.genericui.component.layout.HybridLayoutMode
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.window.WindowConfiguration
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Shared mobile layout state machine for [AdaptiveSplitTabFragment] across `:android` and `:ios`.
+ * Shared mobile layout state machine for [HybridColumnFragment] across `:android` and `:ios`.
  * Coordinates the 3-mode responsive layout (tablet/foldable landscape multi-column vs
  * phone landscape optional immersive fullscreen vs phone/tablet portrait single-flow with tabs).
  */
@@ -47,16 +49,19 @@ class MobileAdaptiveFragmentCoordinator(
     }
 
     fun resolveLayoutMode(
-        fragment: AdaptiveSplitTabFragment,
+        fragment: HybridColumnFragment,
         config: WindowConfiguration
-    ): AdaptiveSplitTabFragment.LayoutMode {
+    ): HybridLayoutMode {
+        val autoPhoneFullscreen =
+            fragment.fullscreenPolicy == HybridFullscreenPolicy.AUTO_FULLSCREEN_ON_PHONE_LANDSCAPE ||
+                fragment.fullscreenPolicy == HybridFullscreenPolicy.AUTO_PHONE_LANDSCAPE_AND_TABLET_LOCKED
         return when {
-            config.isLandscape && !formFactor.isLargeScreen && fragment.phoneLandscapeFullscreen ->
-                AdaptiveSplitTabFragment.LayoutMode.PHONE_LANDSCAPE_FULLSCREEN
+            config.isLandscape && !formFactor.isLargeScreen && autoPhoneFullscreen ->
+                HybridLayoutMode.FULLSCREEN
             config.isLandscape || posture == MobileOrientationPosture.BOOK_HALF_OPEN ->
-                AdaptiveSplitTabFragment.LayoutMode.TABLET_DESKTOP_COLUMNS
+                HybridLayoutMode.COLUMNS
             else ->
-                AdaptiveSplitTabFragment.LayoutMode.PORTRAIT_SINGLE_FLOW_TABS
+                HybridLayoutMode.SINGLE
         }
     }
 

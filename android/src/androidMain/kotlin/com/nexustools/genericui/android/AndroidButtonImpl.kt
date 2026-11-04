@@ -10,7 +10,7 @@ import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
  * When `type != null` (e.g. [BootstrapType.DANGER], [BootstrapType.PRIMARY]), tints the button
  * using [com.nexustools.genericui.style.color.BootstrapColorPalette].
  */
-class AndroidButtonImpl(
+open class AndroidButtonImpl(
     classPrefix: String = "btn"
 ) : AndroidBaseNativeImpl("com.google.android.material.button.MaterialButton", classPrefix), ButtonNativeImpl<AndroidViewHandle> {
     private var iconName: String? = null
@@ -36,7 +36,7 @@ class AndroidButtonImpl(
 
     override fun setIcon(icon: String?) {
         iconName = icon
-        if (icon != null) nativeWidget.metadata["icon"] = icon else nativeWidget.metadata.remove("icon")
+        if (icon != null) nativeWidget.attributes["icon"] = icon else nativeWidget.attributes.remove("icon")
     }
 
     override fun getIcon(): String? = iconName

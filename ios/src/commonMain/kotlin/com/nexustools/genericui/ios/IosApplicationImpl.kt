@@ -24,7 +24,7 @@ class IosApplicationImpl : ApplicationNativeImpl<IosNativeView> {
     override fun setThemeMode(mode: ThemeMode) {
         themeMode = mode
         applyUserInterfaceStyle(mode)
-        SystemThemeDetector.notifyThemeChanged()
+        SystemThemeDetector.notifySystemThemeChanged()
     }
 
     private fun applyUserInterfaceStyle(mode: ThemeMode) {

@@ -1,9 +1,13 @@
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.layout.LayoutFactory
 import com.nexustools.genericui.core.NativeFactory
+import com.nexustools.genericui.enums.system.BackendTarget
 import com.nexustools.genericui.image.ImageLoader
+import com.nexustools.genericui.mobile.layout.MobileLayoutFactory
 import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
 import com.nexustools.genericui.nativeimpl.action.DropdownNativeImpl
+import com.nexustools.genericui.nativeimpl.action.StyledButtonNativeImpl
 import com.nexustools.genericui.nativeimpl.content.ImageNativeImpl
 import com.nexustools.genericui.nativeimpl.content.TableNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.DialogWindowNativeImpl
@@ -17,19 +21,24 @@ import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
 import com.nexustools.genericui.nativeimpl.form.RangeSliderNativeImpl
 import com.nexustools.genericui.nativeimpl.form.SelectNativeImpl
 import com.nexustools.genericui.nativeimpl.form.TextInputNativeImpl
+import com.nexustools.genericui.nativeimpl.io.FileSystemNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.DividerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ScrollViewNativeImpl
+import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyGridNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyListNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.TreeViewNativeImpl
 import com.nexustools.genericui.nativeimpl.navigation.BottomNavigationBarNativeImpl
 import com.nexustools.genericui.nativeimpl.navigation.NavbarNativeImpl
+import com.nexustools.genericui.nativeimpl.net.HttpClientNativeImpl
+import com.nexustools.genericui.nativeimpl.net.TcpSocketNativeImpl
+import com.nexustools.genericui.nativeimpl.net.UdpSocketNativeImpl
+import com.nexustools.genericui.nativeimpl.net.WebSocketNativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
 import com.nexustools.genericui.nativeimpl.overlay.PopoverNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.*
-import com.nexustools.genericui.nativeimpl.surface.CollapseNativeImpl
 import com.nexustools.genericui.nativeimpl.system.*
 import com.nexustools.genericui.nativeimpl.typography.MarkdownViewNativeImpl
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
@@ -44,6 +53,29 @@ import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
  */
 class IosNativeFactory : NativeFactory {
     override val backendName: String = "ios"
+    override val backendTarget: BackendTarget = BackendTarget.IOS
+    override val layoutFactory: LayoutFactory = MobileLayoutFactory
+
+    override val defaultTitleCapabilities: com.nexustools.genericui.window.TitleCapabilities =
+        com.nexustools.genericui.window.TitleCapabilities(
+            isEmulated = true,
+            supportsNavbarMenuBar = true,
+            supportsWindowIcon = false,
+            supportsMinimizeButton = false,
+            supportsMaximizeButton = false,
+            supportsCloseButton = false,
+            supportsControlsPlacement = false,
+            isTitleBarRequired = false,
+            titleBarRendersAsNavbar = true,
+            menuBarRendersAsNavbar = true,
+            menuBarMergesIntoTitleNavbar = true
+        )
+    override val supportsMultipleWindows: Boolean = false
+    override val supportsToolModalWindows: Boolean = false
+    override val supportsSystemTray: Boolean = false
+
+    override fun supportsTcp(): Boolean = true
+    override fun supportsUdp(): Boolean = true
 
     init {
         ImageLoader.activeNativeCodec = IosImageIoCodecImpl()
@@ -57,7 +89,6 @@ class IosNativeFactory : NativeFactory {
     override fun createMenu(): MenuNativeImpl<*> = IosMenuImpl()
     override fun createMenuItem(checkable: Boolean, radio: Boolean): MenuItemNativeImpl<*> = IosMenuItemImpl(checkable, radio)
     override fun createContextMenu(): ContextMenuNativeImpl<*> = IosContextMenuImpl()
-    override fun createSplitPane(): SplitPaneNativeImpl<*> = IosSplitPaneImpl()
 
     // Dockable Panel System (GIMP / Photoshop Studio)
     override fun createDockWorkspace(): DockWorkspaceNativeImpl<*> = IosDockWorkspaceImpl()
@@ -69,6 +100,8 @@ class IosNativeFactory : NativeFactory {
 
     // Layout & Printable Book Documents
     override fun createContainer(classPrefix: String): ContainerNativeImpl<*> = IosContainerImpl(classPrefix)
+    override fun createStyledContainer(classPrefix: String, tagName: String): StyledContainerNativeImpl<*> =
+        IosStyledContainerImpl(classPrefix)
     override fun createBookContainer(): BookContainerNativeImpl<*> = IosBookContainerImpl()
     override fun createScrollView(): ScrollViewNativeImpl<*> = IosScrollViewImpl()
     override fun createDivider(): DividerNativeImpl<*> = IosDividerImpl()
@@ -81,6 +114,7 @@ class IosNativeFactory : NativeFactory {
 
     // Action & Form
     override fun createButton(classPrefix: String): ButtonNativeImpl<*> = IosButtonImpl(classPrefix)
+    override fun createStyledButton(classPrefix: String): StyledButtonNativeImpl<*> = IosStyledButtonImpl(classPrefix)
     override fun createDropdown(): DropdownNativeImpl<*> = IosDropdownImpl()
     override fun createTextInput(multiline: Boolean): TextInputNativeImpl<*> = IosTextInputImpl(multiline)
     override fun createSelect(): SelectNativeImpl<*> = IosSelectImpl()
@@ -88,7 +122,6 @@ class IosNativeFactory : NativeFactory {
     override fun createRangeSlider(): RangeSliderNativeImpl<*> = IosRangeSliderImpl()
 
     // Surface, Tabs, Navigation, Feedback & Overlay
-    override fun createCollapse(): CollapseNativeImpl<*> = IosCollapseImpl()
     override fun createTab(closable: Boolean): TabNativeImpl<*> = IosTabImpl(closable)
     override fun createTabContainer(): TabContainerNativeImpl<*> = IosTabContainerImpl()
     override fun createNavbar(): NavbarNativeImpl<*> = IosNavbarImpl()
@@ -118,6 +151,20 @@ class IosNativeFactory : NativeFactory {
         IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = false)
     override fun createCacheDirectory(appName: String, subdirectory: String): UserDirectoryNativeImpl =
         IosUserDirectoryNativeImpl(appName = appName, subdirectory = subdirectory, isCache = true)
+    override fun createFileSystem(): FileSystemNativeImpl =
+        IosFileSystemNativeImpl()
+    override fun createDatabase(databaseName: String, filePath: String?, version: Int): DatabaseNativeImpl =
+        IosDatabaseNativeImpl(
+            databaseName = databaseName,
+            filePath = filePath ?: "$databaseName.db",
+            version = version
+        )
     override fun createResourceResolver(): com.nexustools.genericui.resources.ResourceResolverNativeImpl =
         IosResourceResolverImpl()
+
+    // Async Networking (TCP, UDP, HTTP/HTTPS, WebSocket)
+    override fun createTcpSocket(): TcpSocketNativeImpl = IosTcpSocketNativeImpl()
+    override fun createUdpSocket(): UdpSocketNativeImpl = IosUdpSocketNativeImpl()
+    override fun createHttpClient(): HttpClientNativeImpl = IosHttpClientNativeImpl()
+    override fun createWebSocket(): WebSocketNativeImpl = IosWebSocketNativeImpl()
 }

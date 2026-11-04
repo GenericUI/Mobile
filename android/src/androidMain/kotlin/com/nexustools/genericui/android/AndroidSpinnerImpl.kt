@@ -17,6 +17,6 @@ class AndroidSpinnerImpl : AndroidBaseNativeImpl("com.google.android.material.pr
     }
 
     override fun setLabel(label: String?) {
-        nativeWidget.contentDescription = label ?: ""
+        nativeWidget.tagId = label ?: ""
     }
 }

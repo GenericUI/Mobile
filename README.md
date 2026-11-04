@@ -52,3 +52,12 @@ The `:mobile` module hierarchy provides native mobile UI backends for **Android*
 Unlike desktop platforms where an OS window always has a titlebar (`isTitleBarRequired = true`), both `:mobile:android` and `:mobile:ios` report `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true`:
 1. **Neither `TitleBar` nor `MenuBar` set**: **No top navbar is rendered at all**; the root container fills the entire safe-area viewport.
 2. **`TitleBar` and/or `MenuBar` set**: Renders a single top navigation bar (`MaterialToolbar` / `AndroidNavbarImpl` on Android; native top navigation bar on iOS) with single-placement custom components (`mountedInTitleBar = true`) and a merged right-aligned `MenuBar` dropdown (`☰`) when a `MenuBar` is present.
+
+---
+
+## Bare-Metal Native Async `IFileSystem`, `Database`, & `Network` Across Mobile Backends
+
+| Backend | `FileSystem` (`FileSystemAvailability.WithPermission`) & `UserDirectory` (`FileSystemAvailability.Always`) | Native `Database` (`DatabaseQuerySqlTranslator`) | Async `Network` (`TcpClient`, `UdpClient`), `HttpClient`, `WebSocket`, & `IApplication.isOffline` |
+| :--- | :--- | :--- | :--- |
+| [`:mobile:android`](android/README.md) | `FileChannel` + Storage Access Framework (`ContentResolver` / `ACTION_OPEN_DOCUMENT*`); `AndroidUserDirectoryNativeImpl` (`context.filesDir` & `context.cacheDir`) | **`androidx.sqlite:sqlite-ktx`** (`android.database.sqlite.SQLiteDatabase` / `SQLiteStatement` on `Dispatchers.IO`) | `SocketChannel` / `SSLSocket`, `DatagramChannel` / `MulticastSocket`, `HttpURLConnection`, RFC 6455 WebSocket, `ConnectivityManager` (`NetworkCallback`) |
+| [`:mobile:ios`](ios/README.md) | `NSFileManager` / `dispatch_io_t` + `UIDocumentPickerViewController` security-scoped URLs; `IosUserDirectoryNativeImpl` (`Library/Application Support` & `Library/Caches`) | **`libsqlite3`** (`sqlite3_open_v2`, `sqlite3_prepare_v2`) | `Network.framework` (`NWConnection` TCP/TLS & BSD `SOCK_DGRAM`), `NSURLSession` (`NSURLSessionDataTask`, `NSURLSessionWebSocketTask`), `NWPathMonitor` |

@@ -19,12 +19,15 @@ class AndroidUserDirectoryNativeImpl(
 
     override val fileSeparator: Char = File.separatorChar
 
+    override val usesFileSystemBasePath: Boolean = true
+
     private val targetDir: File? = context?.let { ctx ->
-        val root = if (isCache) ctx.cacheDir else ctx.filesDir
+        val root = if (isCache) runCatching { ctx.cacheDir }.getOrNull() else runCatching { ctx.filesDir }.getOrNull()
+        if (root == null) return@let null
         val appDir = File(root, sanitizeName(appName))
         val cleanSub = subdirectory.trim().trim('/', '\\')
         val resolved = if (cleanSub.isEmpty()) appDir else File(appDir, cleanSub)
-        resolved.mkdirs()
+        runCatching { resolved.mkdirs() }
         resolved
     }
 
@@ -43,6 +46,67 @@ class AndroidUserDirectoryNativeImpl(
         private set
 
     private val fallbackFiles = LinkedHashMap<String, ByteArray>()
+
+    override suspend fun readAsync(fileName: String): com.nexustools.genericui.io.ByteBuffer? {
+        if (com.nexustools.genericui.core.GenericUI.activeFactory is AndroidNativeFactory) {
+            com.nexustools.genericui.io.FileSystem.read(resolveFilePath(fileName))?.let { return it }
+        }
+        return readBytes(fileName)?.let { com.nexustools.genericui.io.ByteBuffer.wrap(it) }
+    }
+
+    override suspend fun writeAsync(
+        fileName: String,
+        buffer: com.nexustools.genericui.io.ByteBuffer,
+        append: Boolean
+    ): Boolean {
+        ensureDirectoryExists()
+        val incoming = buffer.toByteArray()
+        val merged = if (append) {
+            val existing = readBytes(fileName)
+            if (existing == null || existing.isEmpty()) incoming else existing + incoming
+        } else {
+            incoming
+        }
+        writeBytes(fileName, merged)
+        if (com.nexustools.genericui.core.GenericUI.activeFactory is AndroidNativeFactory) {
+            return com.nexustools.genericui.io.FileSystem.write(resolveFilePath(fileName), buffer, append)
+        }
+        return true
+    }
+
+    override suspend fun openReadableAsync(fileName: String): com.nexustools.genericui.nativeimpl.io.FileReadableNativeImpl? {
+        if (com.nexustools.genericui.core.GenericUI.activeFactory is AndroidNativeFactory) {
+            (com.nexustools.genericui.io.FileSystem.openReadable(resolveFilePath(fileName))
+                as? com.nexustools.genericui.nativeimpl.io.FileReadableNativeImpl)?.let { return it }
+        }
+        val bytes = readBytes(fileName) ?: return null
+        return AndroidFileReadableNativeImpl(initialBytes = bytes, filePath = resolveFilePath(fileName))
+    }
+
+    override suspend fun openWritableAsync(
+        fileName: String,
+        append: Boolean
+    ): com.nexustools.genericui.nativeimpl.io.FileWritableNativeImpl {
+        ensureDirectoryExists()
+        if (com.nexustools.genericui.core.GenericUI.activeFactory is AndroidNativeFactory) {
+            (com.nexustools.genericui.io.FileSystem.openWritable(resolveFilePath(fileName), append)
+                as? com.nexustools.genericui.nativeimpl.io.FileWritableNativeImpl)?.let { return it }
+        }
+        val dir = targetDir
+        val clean = sanitizeName(fileName)
+        if (dir != null) {
+            return AndroidFileWritableNativeImpl(File(dir, clean), append = append)
+        }
+        val initial = if (append) readBytes(fileName) ?: ByteArray(0) else ByteArray(0)
+        return AndroidFileWritableNativeImpl(
+            initialBytes = initial,
+            filePath = resolveFilePath(fileName),
+            appendMode = append,
+            onCommit = { committed ->
+                writeBytes(fileName, committed)
+            }
+        )
+    }
 
     override fun ensureDirectoryExists(): Boolean {
         if (isDisposed) return false

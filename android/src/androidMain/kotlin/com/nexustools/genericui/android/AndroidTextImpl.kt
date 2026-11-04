@@ -12,7 +12,7 @@ class AndroidTextImpl(
     private var maxLinesValue: Int? = null
 
     init {
-        nativeWidget.metadata["tagName"] = tagName
+        nativeWidget.attributes["tagName"] = tagName
     }
 
     override fun setText(text: String) {
@@ -23,7 +23,7 @@ class AndroidTextImpl(
 
     override fun setMaxLines(maxLines: Int?) {
         maxLinesValue = maxLines
-        nativeWidget.metadata["maxLines"] = (maxLines ?: Int.MAX_VALUE).toString()
+        nativeWidget.attributes["maxLines"] = (maxLines ?: Int.MAX_VALUE).toString()
     }
 
     override fun getMaxLines(): Int? = maxLinesValue

@@ -12,7 +12,7 @@ class AndroidDockGroupImpl : AndroidBaseContainerNativeImpl("android.widget.Line
 
     override fun setGroupMode(mode: DockGroupMode) {
         groupMode = mode
-        nativeWidget.metadata["groupMode"] = mode.name.lowercase()
+        nativeWidget.attributes["groupMode"] = mode.name.lowercase()
     }
 
     override fun getGroupMode(): DockGroupMode = groupMode

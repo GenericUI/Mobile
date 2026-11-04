@@ -24,12 +24,12 @@ class AndroidTabImpl(
     private var onTitleEditedListener: ((String) -> Unit)? = null
 
     init {
-        nativeWidget.metadata["closable"] = initialClosable.toString()
+        nativeWidget.attributes["closable"] = initialClosable.toString()
     }
 
     override fun setTabIdNative(id: String) {
         tabIdVal = id
-        nativeWidget.metadata["tabId"] = id
+        nativeWidget.attributes["tabId"] = id
     }
 
     override fun setTitleNative(title: String) {
@@ -38,7 +38,7 @@ class AndroidTabImpl(
     }
 
     override fun setIconNative(icon: String?) {
-        if (icon != null) nativeWidget.metadata["icon"] = icon else nativeWidget.metadata.remove("icon")
+        if (icon != null) nativeWidget.attributes["icon"] = icon else nativeWidget.attributes.remove("icon")
     }
 
     override fun setTooltipNative(tooltip: String?) {
@@ -47,33 +47,33 @@ class AndroidTabImpl(
 
     override fun setClosableNative(closable: Boolean) {
         closableVal = closable
-        nativeWidget.metadata["closable"] = closable.toString()
+        nativeWidget.attributes["closable"] = closable.toString()
     }
 
     override fun setDirtyNative(dirty: Boolean) {
-        nativeWidget.metadata["dirty"] = dirty.toString()
+        nativeWidget.attributes["dirty"] = dirty.toString()
     }
 
     override fun setPinnedNative(pinned: Boolean) {
-        nativeWidget.metadata["pinned"] = pinned.toString()
+        nativeWidget.attributes["pinned"] = pinned.toString()
     }
 
     override fun setEditableNative(editable: Boolean) {
-        nativeWidget.metadata["editable"] = editable.toString()
+        nativeWidget.attributes["editable"] = editable.toString()
     }
 
     override fun setBadgeNative(badgeText: String?, variantCss: String?) {
         if (badgeText != null) {
-            nativeWidget.metadata["badgeText"] = badgeText
-            nativeWidget.metadata["badgeVariant"] = variantCss ?: "primary"
+            nativeWidget.attributes["badgeText"] = badgeText
+            nativeWidget.attributes["badgeVariant"] = variantCss ?: "primary"
         } else {
-            nativeWidget.metadata.remove("badgeText")
-            nativeWidget.metadata.remove("badgeVariant")
+            nativeWidget.attributes.remove("badgeText")
+            nativeWidget.attributes.remove("badgeVariant")
         }
     }
 
     override fun setSelectedNative(selected: Boolean) {
-        nativeWidget.metadata["selected"] = selected.toString()
+        nativeWidget.attributes["selected"] = selected.toString()
     }
 
     override fun setCustomHeaderComponentNative(customImpl: NativeImpl<*>?) {
@@ -81,9 +81,9 @@ class AndroidTabImpl(
         customHeaderImpl = customImpl
         if (customImpl != null) {
             addChildNative(customImpl)
-            nativeWidget.metadata["hasCustomView"] = "true"
+            nativeWidget.attributes["hasCustomView"] = "true"
         } else {
-            nativeWidget.metadata["hasCustomView"] = "false"
+            nativeWidget.attributes["hasCustomView"] = "false"
         }
     }
 

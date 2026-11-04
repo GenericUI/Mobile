@@ -20,8 +20,8 @@ class AndroidDropdownImpl : AndroidBaseContainerNativeImpl("com.google.android.m
     override fun setItems(items: List<Pair<String, String>>) {
         dropdownItems.clear()
         dropdownItems.addAll(items)
-        nativeWidget.metadata["itemCount"] = items.size.toString()
-        nativeWidget.metadata["itemLabels"] = items.joinToString("|") { it.second }
+        nativeWidget.attributes["itemCount"] = items.size.toString()
+        nativeWidget.attributes["itemLabels"] = items.joinToString("|") { it.second }
     }
 
     fun getItems(): List<Pair<String, String>> = dropdownItems

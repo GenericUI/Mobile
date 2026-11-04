@@ -12,12 +12,12 @@ class AndroidDockAreaImpl : AndroidBaseContainerNativeImpl("android.widget.Linea
 
     override fun setPosition(position: DockPosition) {
         this.position = position
-        nativeWidget.metadata["dockPosition"] = position.name.lowercase()
+        nativeWidget.attributes["dockPosition"] = position.name.lowercase()
     }
 
     override fun setCollapsed(collapsed: Boolean) {
         this.collapsed = collapsed
-        nativeWidget.visibility = !collapsed
+        nativeWidget.visible = !collapsed
     }
 
     override fun isCollapsed(): Boolean = collapsed

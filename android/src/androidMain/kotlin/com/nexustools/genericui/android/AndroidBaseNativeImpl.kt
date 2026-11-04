@@ -19,9 +19,9 @@ import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.mobile.gesture.MobileGestureRecognizer
-import com.nexustools.genericui.style.RgbaColor
 import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
 import com.nexustools.genericui.style.color.BootstrapColorPalette
+import com.nexustools.genericui.style.color.RgbaColor
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.css.CssCursorValue
@@ -154,7 +154,7 @@ open class AndroidBaseNativeImpl(
             nativeWidget.androidView?.backgroundTintList = null
         } else {
             nativeWidget.attributes["useSystemControlAppearance"] = "false"
-            nativeWidget.attributes["bootstrapTintColor"] = tintColor.toCssHex()
+            nativeWidget.attributes["bootstrapTintColor"] = tintColor.toHex()
             nativeWidget.androidView?.let { view ->
                 runCatching {
                     view.backgroundTintList = ColorStateList.valueOf(tintColor.toArgbInt())
@@ -165,14 +165,14 @@ open class AndroidBaseNativeImpl(
         }
 
         if (fgColor != null) {
-            nativeWidget.attributes["bootstrapForegroundColor"] = fgColor.toCssHex()
+            nativeWidget.attributes["bootstrapForegroundColor"] = fgColor.toHex()
             (nativeWidget.androidView as? TextView)?.setTextColor(fgColor.toArgbInt())
         } else {
             nativeWidget.attributes.remove("bootstrapForegroundColor")
         }
 
         when (val w = styleSnapshot.width) {
-            BootstrapWidth.W_100 -> {
+            BootstrapWidth.W_100, BootstrapWidth.VW_100, BootstrapWidth.MIN_VW_100 -> {
                 nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
                 nativeWidget.androidView?.layoutParams?.let { lp ->
                     lp.width = ViewGroup.LayoutParams.MATCH_PARENT
@@ -180,16 +180,16 @@ open class AndroidBaseNativeImpl(
                 }
             }
             BootstrapWidth.W_25, BootstrapWidth.W_50, BootstrapWidth.W_75 -> {
-                nativeWidget.attributes["layoutWidth"] = "${w.percent ?: 100}%"
+                nativeWidget.attributes["layoutWidth"] = "${((w.fraction ?: 1f) * 100f).roundToInt()}%"
             }
-            BootstrapWidth.W_AUTO -> {
+            BootstrapWidth.W_AUTO, BootstrapWidth.MW_100 -> {
                 nativeWidget.attributes["layoutWidth"] = "WRAP_CONTENT"
             }
             null -> nativeWidget.attributes.remove("layoutWidth")
         }
 
         when (val h = styleSnapshot.height) {
-            BootstrapHeight.H_100 -> {
+            BootstrapHeight.H_100, BootstrapHeight.VH_100, BootstrapHeight.MIN_VH_100 -> {
                 nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
                 nativeWidget.androidView?.layoutParams?.let { lp ->
                     lp.height = ViewGroup.LayoutParams.MATCH_PARENT
@@ -197,9 +197,9 @@ open class AndroidBaseNativeImpl(
                 }
             }
             BootstrapHeight.H_25, BootstrapHeight.H_50, BootstrapHeight.H_75 -> {
-                nativeWidget.attributes["layoutHeight"] = "${h.percent ?: 100}%"
+                nativeWidget.attributes["layoutHeight"] = "${((h.fraction ?: 1f) * 100f).roundToInt()}%"
             }
-            BootstrapHeight.H_AUTO -> {
+            BootstrapHeight.H_AUTO, BootstrapHeight.MH_100 -> {
                 nativeWidget.attributes["layoutHeight"] = "WRAP_CONTENT"
             }
             null -> nativeWidget.attributes.remove("layoutHeight")
@@ -259,9 +259,9 @@ open class AndroidBaseNativeImpl(
         styleSnapshot.shadow?.let { sh ->
             val elev = when (sh) {
                 ShadowElevation.NONE -> 0f
-                ShadowElevation.SM -> 2f
-                ShadowElevation.REGULAR -> 6f
-                ShadowElevation.LG -> 12f
+                ShadowElevation.SMALL -> 2f
+                ShadowElevation.DEFAULT -> 6f
+                ShadowElevation.LARGE -> 12f
             }
             nativeWidget.attributes["elevation"] = elev.toString()
             nativeWidget.androidView?.elevation = elev
@@ -269,12 +269,12 @@ open class AndroidBaseNativeImpl(
     }
 
     private fun spacingScaleToPx(scale: SpacingScale?): Int? = when (scale) {
-        SpacingScale.S_0 -> 0
-        SpacingScale.S_1 -> 4
-        SpacingScale.S_2 -> 8
-        SpacingScale.S_3 -> 16
-        SpacingScale.S_4 -> 24
-        SpacingScale.S_5 -> 48
+        SpacingScale.ZERO -> 0
+        SpacingScale.ONE -> 4
+        SpacingScale.TWO -> 8
+        SpacingScale.THREE -> 16
+        SpacingScale.FOUR -> 24
+        SpacingScale.FIVE -> 48
         SpacingScale.AUTO, null -> null
     }
 
@@ -325,6 +325,15 @@ open class AndroidBaseNativeImpl(
         if (style.getDisplay() == CssDisplay.NONE) {
             setVisible(false)
         }
+        val cssProps = style.toCssPropertyMap()
+        cssProps["flex-grow"]?.first?.let { nativeWidget.attributes["layoutWeight"] = it }
+            ?: nativeWidget.attributes.remove("layoutWeight")
+        cssProps["flex-shrink"]?.first?.let { nativeWidget.attributes["flexShrink"] = it }
+            ?: nativeWidget.attributes.remove("flexShrink")
+        cssProps["flex-basis"]?.first?.let { nativeWidget.attributes["flexBasis"] = it }
+            ?: nativeWidget.attributes.remove("flexBasis")
+        cssProps["aspect-ratio"]?.first?.let { nativeWidget.attributes["aspectRatio"] = it }
+            ?: nativeWidget.attributes.remove("aspectRatio")
         // Unsupported CSS properties on mobile (such as cursor) are silently ignored.
         syncNativeBootstrapAppearance()
     }

@@ -1,9 +1,13 @@
 package com.nexustools.genericui.android
 
+import com.nexustools.genericui.component.layout.LayoutFactory
 import com.nexustools.genericui.core.NativeFactory
+import com.nexustools.genericui.enums.system.BackendTarget
 import com.nexustools.genericui.image.ImageLoader
+import com.nexustools.genericui.mobile.layout.MobileLayoutFactory
 import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
 import com.nexustools.genericui.nativeimpl.action.DropdownNativeImpl
+import com.nexustools.genericui.nativeimpl.action.StyledButtonNativeImpl
 import com.nexustools.genericui.nativeimpl.content.ImageNativeImpl
 import com.nexustools.genericui.nativeimpl.content.TableNativeImpl
 import com.nexustools.genericui.nativeimpl.dialog.DialogWindowNativeImpl
@@ -17,19 +21,24 @@ import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
 import com.nexustools.genericui.nativeimpl.form.RangeSliderNativeImpl
 import com.nexustools.genericui.nativeimpl.form.SelectNativeImpl
 import com.nexustools.genericui.nativeimpl.form.TextInputNativeImpl
+import com.nexustools.genericui.nativeimpl.io.FileSystemNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.DividerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ScrollViewNativeImpl
+import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyGridNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyListNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.TreeViewNativeImpl
 import com.nexustools.genericui.nativeimpl.navigation.BottomNavigationBarNativeImpl
 import com.nexustools.genericui.nativeimpl.navigation.NavbarNativeImpl
+import com.nexustools.genericui.nativeimpl.net.HttpClientNativeImpl
+import com.nexustools.genericui.nativeimpl.net.TcpSocketNativeImpl
+import com.nexustools.genericui.nativeimpl.net.UdpSocketNativeImpl
+import com.nexustools.genericui.nativeimpl.net.WebSocketNativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
 import com.nexustools.genericui.nativeimpl.overlay.PopoverNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.*
-import com.nexustools.genericui.nativeimpl.surface.CollapseNativeImpl
 import com.nexustools.genericui.nativeimpl.system.*
 import com.nexustools.genericui.nativeimpl.typography.MarkdownViewNativeImpl
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
@@ -47,6 +56,30 @@ class AndroidNativeFactory(
     val context: android.content.Context? = null
 ) : NativeFactory {
     override val backendName: String = "android"
+    override val backendTarget: BackendTarget = BackendTarget.Android
+    override val layoutFactory: LayoutFactory = MobileLayoutFactory
+
+    override val defaultTitleCapabilities: com.nexustools.genericui.window.TitleCapabilities =
+        com.nexustools.genericui.window.TitleCapabilities(
+            isEmulated = true,
+            supportsNavbarMenuBar = true,
+            supportsWindowIcon = false,
+            supportsMinimizeButton = false,
+            supportsMaximizeButton = false,
+            supportsCloseButton = false,
+            supportsControlsPlacement = false,
+            isTitleBarRequired = false,
+            titleBarRendersAsNavbar = true,
+            menuBarRendersAsNavbar = true,
+            menuBarMergesIntoTitleNavbar = true
+        )
+    override val supportsMultipleWindows: Boolean = false
+    override val supportsToolModalWindows: Boolean = false
+    override val supportsServices: Boolean = true
+    override val supportsSystemTray: Boolean = false
+
+    override fun supportsTcp(): Boolean = true
+    override fun supportsUdp(): Boolean = true
 
     init {
         if (context != null) {
@@ -64,7 +97,6 @@ class AndroidNativeFactory(
     override fun createMenu(): MenuNativeImpl<*> = AndroidMenuImpl()
     override fun createMenuItem(checkable: Boolean, radio: Boolean): MenuItemNativeImpl<*> = AndroidMenuItemImpl(checkable, radio)
     override fun createContextMenu(): ContextMenuNativeImpl<*> = AndroidContextMenuImpl()
-    override fun createSplitPane(): SplitPaneNativeImpl<*> = AndroidSplitPaneImpl()
 
     // Dockable Panel System (GIMP / Photoshop Studio)
     override fun createDockWorkspace(): DockWorkspaceNativeImpl<*> = AndroidDockWorkspaceImpl()
@@ -76,6 +108,8 @@ class AndroidNativeFactory(
 
     // Layout & Printable Book Documents
     override fun createContainer(classPrefix: String): ContainerNativeImpl<*> = AndroidContainerImpl(classPrefix)
+    override fun createStyledContainer(classPrefix: String, tagName: String): StyledContainerNativeImpl<*> =
+        AndroidStyledContainerImpl(classPrefix)
     override fun createBookContainer(): BookContainerNativeImpl<*> = AndroidBookContainerImpl()
     override fun createScrollView(): ScrollViewNativeImpl<*> = AndroidScrollViewImpl()
     override fun createDivider(): DividerNativeImpl<*> = AndroidDividerImpl()
@@ -88,6 +122,7 @@ class AndroidNativeFactory(
 
     // Action & Form
     override fun createButton(classPrefix: String): ButtonNativeImpl<*> = AndroidButtonImpl(classPrefix)
+    override fun createStyledButton(classPrefix: String): StyledButtonNativeImpl<*> = AndroidStyledButtonImpl(classPrefix)
     override fun createDropdown(): DropdownNativeImpl<*> = AndroidDropdownImpl()
     override fun createTextInput(multiline: Boolean): TextInputNativeImpl<*> = AndroidTextInputImpl(multiline)
     override fun createSelect(): SelectNativeImpl<*> = AndroidSelectImpl()
@@ -95,7 +130,6 @@ class AndroidNativeFactory(
     override fun createRangeSlider(): RangeSliderNativeImpl<*> = AndroidRangeSliderImpl()
 
     // Surface, Tabs, Navigation, Feedback & Overlay
-    override fun createCollapse(): CollapseNativeImpl<*> = AndroidCollapseImpl()
     override fun createTab(closable: Boolean): TabNativeImpl<*> = AndroidTabImpl(closable)
     override fun createTabContainer(): TabContainerNativeImpl<*> = AndroidTabContainerImpl()
     override fun createNavbar(): NavbarNativeImpl<*> = AndroidNavbarImpl()
@@ -136,6 +170,26 @@ class AndroidNativeFactory(
             isCache = true,
             context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
         )
+    override fun createFileSystem(): FileSystemNativeImpl =
+        AndroidFileSystemNativeImpl(
+            context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
+        )
+    override fun createDatabase(
+        databaseName: String,
+        filePath: String?,
+        version: Int
+    ): DatabaseNativeImpl = AndroidDatabaseNativeImpl(
+        databaseName = databaseName,
+        filePath = filePath ?: "$databaseName.db",
+        version = version,
+        context = context ?: AndroidPreferenceStoreImpl.applicationContext ?: AndroidViewHandle.activeContext
+    )
     override fun createResourceResolver(): com.nexustools.genericui.resources.ResourceResolverNativeImpl =
         AndroidResourceResolverImpl(context)
+
+    // Async Networking (TCP, UDP, HTTP/HTTPS, WebSocket)
+    override fun createTcpSocket(): TcpSocketNativeImpl = AndroidTcpSocketNativeImpl()
+    override fun createUdpSocket(): UdpSocketNativeImpl = AndroidUdpSocketNativeImpl()
+    override fun createHttpClient(): HttpClientNativeImpl = AndroidHttpClientNativeImpl()
+    override fun createWebSocket(): WebSocketNativeImpl = AndroidWebSocketNativeImpl()
 }

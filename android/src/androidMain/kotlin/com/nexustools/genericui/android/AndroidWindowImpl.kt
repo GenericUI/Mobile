@@ -106,14 +106,32 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
     override fun setWindowState(state: WindowState) { windowState = state }
     override fun getWindowState(): WindowState = windowState
 
+    private var fullscreenElementImpl: NativeImpl<*>? = null
+
     override fun setFullscreen(fullscreen: Boolean, cutoutMode: DisplayCutoutMode) {
         fullscreenFlag = fullscreen
+        if (!fullscreen) {
+            fullscreenElementImpl = null
+            nativeWidget.attributes.remove("fullscreenElement")
+        }
         nativeWidget.attributes["fullscreen"] = fullscreen.toString()
         nativeWidget.attributes["cutoutMode"] = cutoutMode.name
         rebuildMobileMenuBarNavbar()
     }
 
     override fun isFullscreen(): Boolean = fullscreenFlag
+
+    override fun setFullscreenElement(elementImpl: NativeImpl<*>?, cutoutMode: DisplayCutoutMode) {
+        fullscreenElementImpl = elementImpl
+        if (elementImpl != null) {
+            nativeWidget.attributes["fullscreenElement"] = elementImpl.nativeWidget.toString()
+        } else {
+            nativeWidget.attributes.remove("fullscreenElement")
+        }
+        setFullscreen(elementImpl != null, cutoutMode)
+    }
+
+    override fun getFullscreenElement(): NativeImpl<*>? = fullscreenElementImpl
 
     override fun applyTitleBarInstructions(titleBar: TitleBar?) {
         if (this.titleBarInstructions != titleBar) {

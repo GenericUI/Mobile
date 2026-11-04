@@ -30,11 +30,11 @@ class AndroidTextInputImpl(
     }
 
     override fun setPasswordMode(password: Boolean) {
-        nativeWidget.metadata["inputType"] = if (password) "password" else "text"
+        nativeWidget.attributes["inputType"] = if (password) "password" else "text"
     }
 
     override fun setMultiline(multiline: Boolean) {
-        nativeWidget.metadata["multiline"] = multiline.toString()
+        nativeWidget.attributes["multiline"] = multiline.toString()
     }
 
     override fun setOnValueChanged(listener: ((String) -> Unit)?) {

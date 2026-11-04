@@ -26,8 +26,6 @@ class IosNativeView(
     var contentOffsetX: Float = 0f
     var contentOffsetY: Float = 0f
     val metadata: MutableMap<String, String> = linkedMapOf()
-    val attributes: MutableMap<String, String>
-        get() = metadata
 
     var superview: IosNativeView? = null
         private set

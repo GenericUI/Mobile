@@ -2,6 +2,8 @@ package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.*
+import com.nexustools.genericui.enums.css.CssDisplay
+import com.nexustools.genericui.enums.css.CssVisibility
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.event.KeyEvent
 import com.nexustools.genericui.event.PointerEvent
@@ -125,12 +127,12 @@ open class IosBaseNativeImpl(
             nativeWidget.backgroundColor = null
         } else {
             nativeWidget.metadata["useSystemControlAppearance"] = "false"
-            nativeWidget.metadata["bootstrapTintColor"] = tintColor.toCssHex()
+            nativeWidget.metadata["bootstrapTintColor"] = tintColor.toHex()
             nativeWidget.backgroundColor = tintColor
         }
 
         if (fgColor != null) {
-            nativeWidget.metadata["bootstrapForegroundColor"] = fgColor.toCssHex()
+            nativeWidget.metadata["bootstrapForegroundColor"] = fgColor.toHex()
             nativeWidget.tintColor = fgColor
         } else {
             nativeWidget.metadata.remove("bootstrapForegroundColor")
@@ -141,14 +143,14 @@ open class IosBaseNativeImpl(
             BootstrapWidth.W_100 -> nativeWidget.metadata["layoutWidth"] = "100%"
             BootstrapWidth.W_AUTO -> nativeWidget.metadata["layoutWidth"] = "auto"
             null -> nativeWidget.metadata.remove("layoutWidth")
-            else -> nativeWidget.metadata["layoutWidth"] = "${w.percentage}%"
+            else -> nativeWidget.metadata["layoutWidth"] = "${((w.fraction ?: 1f) * 100f).roundToInt()}%"
         }
 
         when (val h = styleSnapshot.height) {
             BootstrapHeight.H_100 -> nativeWidget.metadata["layoutHeight"] = "100%"
             BootstrapHeight.H_AUTO -> nativeWidget.metadata["layoutHeight"] = "auto"
             null -> nativeWidget.metadata.remove("layoutHeight")
-            else -> nativeWidget.metadata["layoutHeight"] = "${h.percentage}%"
+            else -> nativeWidget.metadata["layoutHeight"] = "${((h.fraction ?: 1f) * 100f).roundToInt()}%"
         }
 
         styleSnapshot.opacity?.let { op ->
@@ -156,7 +158,7 @@ open class IosBaseNativeImpl(
         }
 
         styleSnapshot.visibility?.let { vis ->
-            nativeWidget.isHidden = !vis.visible
+            nativeWidget.isHidden = (vis == BootstrapVisibility.INVISIBLE)
         }
         if (styleSnapshot.display == DisplayMode.NONE) {
             nativeWidget.isHidden = true
@@ -166,9 +168,9 @@ open class IosBaseNativeImpl(
             val radiusPt = when (br) {
                 BorderRadiusStyle.NONE -> 0f
                 BorderRadiusStyle.SMALL -> 4f
-                BorderRadiusStyle.DEFAULT -> 6f
+                BorderRadiusStyle.DEFAULT, BorderRadiusStyle.MEDIUM -> 6f
                 BorderRadiusStyle.LARGE -> 8f
-                BorderRadiusStyle.XL -> 12f
+                BorderRadiusStyle.EXTRA_LARGE -> 12f
                 BorderRadiusStyle.XXL -> 16f
                 BorderRadiusStyle.PILL -> 999f
                 BorderRadiusStyle.CIRCLE -> 999f
@@ -188,8 +190,8 @@ open class IosBaseNativeImpl(
         }
 
         styleSnapshot.borderWidth?.let { bw ->
-            nativeWidget.borderWidth = bw.scale.toFloat()
-            nativeWidget.metadata["borderWidthPt"] = bw.scale.toString()
+            nativeWidget.borderWidth = bw.widthPx.toFloat()
+            nativeWidget.metadata["borderWidthPt"] = bw.widthPx.toString()
         }
 
         val padAll = spacingScaleToPt(styleSnapshot.paddingAll)
@@ -216,12 +218,12 @@ open class IosBaseNativeImpl(
     }
 
     private fun spacingScaleToPt(scale: SpacingScale?): Int? = when (scale) {
-        SpacingScale.S0 -> 0
-        SpacingScale.S1 -> 4
-        SpacingScale.S2 -> 8
-        SpacingScale.S3 -> 16
-        SpacingScale.S4 -> 24
-        SpacingScale.S5 -> 48
+        SpacingScale.ZERO -> 0
+        SpacingScale.ONE -> 4
+        SpacingScale.TWO -> 8
+        SpacingScale.THREE -> 16
+        SpacingScale.FOUR -> 24
+        SpacingScale.FIVE -> 48
         SpacingScale.AUTO -> 0
         null -> null
     }
@@ -238,7 +240,7 @@ open class IosBaseNativeImpl(
 
         syncNativeBootstrapAppearance()
 
-        val radiusPt = cssLengthToFloatPt(style.borderRadius)
+        val radiusPt = cssLengthToFloatPt(style.borderRadius?.topLeft)
         if (radiusPt != null) {
             nativeWidget.cornerRadius = radiusPt
             nativeWidget.metadata["cornerRadiusPt"] = radiusPt.toString()
@@ -247,7 +249,7 @@ open class IosBaseNativeImpl(
             nativeWidget.metadata.remove("cornerRadiusPt")
         }
 
-        val borderWidthPt = cssLengthToFloatPt(style.borderWidth)
+        val borderWidthPt = cssLengthToFloatPt(style.borderWidth?.top)
         if (borderWidthPt != null) {
             nativeWidget.borderWidth = borderWidthPt
             nativeWidget.metadata["borderWidthPt"] = borderWidthPt.toString()
@@ -257,7 +259,7 @@ open class IosBaseNativeImpl(
         }
 
         style.borderColor?.let {
-            nativeWidget.metadata["borderColor"] = it.toCssHex()
+            nativeWidget.metadata["borderColor"] = it.toHex()
         } ?: nativeWidget.metadata.remove("borderColor")
 
         if (style.opacity != null) {
@@ -273,52 +275,56 @@ open class IosBaseNativeImpl(
             nativeWidget.frame = Rect(cur.x, cur.y, wPt ?: cur.width, hPt ?: cur.height)
         }
 
-        val padAll = cssLengthToIntPt(style.padding)
-        val padTop = cssLengthToIntPt(style.paddingTop) ?: padAll
-        val padRight = cssLengthToIntPt(style.paddingRight) ?: padAll
-        val padBottom = cssLengthToIntPt(style.paddingBottom) ?: padAll
-        val padLeft = cssLengthToIntPt(style.paddingLeft) ?: padAll
+        val padEdges = style.padding
+        val padTop = cssLengthToIntPt(style.paddingTop ?: padEdges?.top)
+        val padRight = cssLengthToIntPt(style.paddingRight ?: padEdges?.right)
+        val padBottom = cssLengthToIntPt(style.paddingBottom ?: padEdges?.bottom)
+        val padLeft = cssLengthToIntPt(style.paddingLeft ?: padEdges?.left)
         if (padTop != null || padRight != null || padBottom != null || padLeft != null) {
             setPadding(EdgeInsets(padTop ?: 0, padRight ?: 0, padBottom ?: 0, padLeft ?: 0))
         }
 
-        val marAll = cssLengthToIntPt(style.margin)
-        val marTop = cssLengthToIntPt(style.marginTop) ?: marAll
-        val marRight = cssLengthToIntPt(style.marginRight) ?: marAll
-        val marBottom = cssLengthToIntPt(style.marginBottom) ?: marAll
-        val marLeft = cssLengthToIntPt(style.marginLeft) ?: marAll
+        val marEdges = style.margin
+        val marTop = cssLengthToIntPt(style.marginTop ?: marEdges?.top)
+        val marRight = cssLengthToIntPt(style.marginRight ?: marEdges?.right)
+        val marBottom = cssLengthToIntPt(style.marginBottom ?: marEdges?.bottom)
+        val marLeft = cssLengthToIntPt(style.marginLeft ?: marEdges?.left)
         if (marTop != null || marRight != null || marBottom != null || marLeft != null) {
             setMargin(EdgeInsets(marTop ?: 0, marRight ?: 0, marBottom ?: 0, marLeft ?: 0))
         }
 
         when {
-            style.display == DisplayMode.NONE || style.visibility == BootstrapVisibility.INVISIBLE -> {
+            style.display == CssDisplay.NONE ||
+                style.visibility == CssVisibility.HIDDEN ||
+                style.visibility == CssVisibility.COLLAPSE -> {
                 nativeWidget.isHidden = true
             }
-            style.display != null || style.visibility == BootstrapVisibility.VISIBLE -> {
+            style.display != null || style.visibility == CssVisibility.VISIBLE -> {
                 nativeWidget.isHidden = false
             }
         }
 
-        for ((k, pair) in style.toCssPropertyMap()) {
+        val cssProps = style.toCssPropertyMap()
+        for ((k, pair) in cssProps) {
             if (k == "cursor") continue
             nativeWidget.metadata["style:$k"] = pair.first
         }
+        cssProps["flex-grow"]?.first?.let { nativeWidget.metadata["layoutWeight"] = it }
+            ?: nativeWidget.metadata.remove("layoutWeight")
+        cssProps["flex-shrink"]?.first?.let { nativeWidget.metadata["flexShrink"] = it }
+            ?: nativeWidget.metadata.remove("flexShrink")
+        cssProps["flex-basis"]?.first?.let { nativeWidget.metadata["flexBasis"] = it }
+            ?: nativeWidget.metadata.remove("flexBasis")
+        cssProps["aspect-ratio"]?.first?.let { nativeWidget.metadata["aspectRatio"] = it }
+            ?: nativeWidget.metadata.remove("aspectRatio")
     }
 
     override fun setCustomCursor(cursor: CssCursorValue?) {
         // Touch-first mobile OS: cursor styling is a no-op on iOS.
     }
 
-    private fun cssLengthToFloatPt(length: CssLength?): Float? = when (length) {
-        is CssLength.Px -> length.value
-        is CssLength.Rem -> length.value * 16f
-        is CssLength.Em -> length.value * 16f
-        is CssLength.Percent -> length.value
-        is CssLength.Vw -> length.value
-        is CssLength.Vh -> length.value
-        CssLength.Auto, null -> null
-    }
+    private fun cssLengthToFloatPt(length: CssLength?): Float? =
+        length?.resolvePx()
 
     private fun cssLengthToIntPt(length: CssLength?): Int? =
         cssLengthToFloatPt(length)?.roundToInt()

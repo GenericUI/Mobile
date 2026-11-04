@@ -1,6 +1,9 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
+import com.nexustools.genericui.io.ByteBuffer
+import com.nexustools.genericui.io.Readable
+import com.nexustools.genericui.io.ReadableByteBuffer
 import com.nexustools.genericui.resources.DefaultResourceResolverNativeImpl
 import com.nexustools.genericui.resources.ResourceID
 import com.nexustools.genericui.style.color.RgbaColor
@@ -94,5 +97,27 @@ class AndroidResourceResolverImpl(
             }
         }
         return super.resolveUrl(resId)
+    }
+
+    override suspend fun openResourceStream(resId: ResourceID): Readable? {
+        val ctx = activeContext()
+        if (ctx != null) {
+            val id = lookupAndroidResId(ctx, resId)
+            if (id != 0) {
+                try {
+                    val stream = ctx.resources.openRawResource(id)
+                    return AndroidFileReadableNativeImpl(
+                        inputStream = stream,
+                        filePath = "android.resource://${ctx.packageName}/$id"
+                    )
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        val bytes = resolveBytes(resId)
+        if (bytes != null) {
+            return ReadableByteBuffer(ByteBuffer.wrap(bytes))
+        }
+        return super.openResourceStream(resId)
     }
 }

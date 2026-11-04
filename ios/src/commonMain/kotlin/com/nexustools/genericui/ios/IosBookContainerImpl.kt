@@ -29,14 +29,14 @@ class IosBookContainerImpl : IosBaseContainerNativeImpl(
         currentPageSize = pageSize
         currentOrientation = orientation
         currentMarginMm = marginMm
-        nativeWidget.attributes["data-page-size"] = pageSize.cssSize
-        nativeWidget.attributes["data-page-orientation"] = orientation.cssOrientation
-        nativeWidget.attributes["data-margin-mm"] = marginMm.toString()
+        nativeWidget.metadata["data-page-size"] = pageSize.cssSize
+        nativeWidget.metadata["data-page-orientation"] = orientation.cssOrientation
+        nativeWidget.metadata["data-margin-mm"] = marginMm.toString()
     }
 
     override fun setDocumentTitle(title: String) {
         currentTitle = title
-        nativeWidget.attributes["title"] = title
+        nativeWidget.metadata["title"] = title
     }
 
     override fun printBook(
@@ -50,9 +50,9 @@ class IosBookContainerImpl : IosBaseContainerNativeImpl(
         currentOrientation = orientation
         currentMarginMm = marginMm
         printCount++
-        nativeWidget.attributes["data-print-count"] = printCount.toString()
-        nativeWidget.attributes["data-last-printed-title"] = documentTitle
-        nativeWidget.attributes["data-printed"] = "true"
+        nativeWidget.metadata["data-print-count"] = printCount.toString()
+        nativeWidget.metadata["data-last-printed-title"] = documentTitle
+        nativeWidget.metadata["data-printed"] = "true"
         return true
     }
 }

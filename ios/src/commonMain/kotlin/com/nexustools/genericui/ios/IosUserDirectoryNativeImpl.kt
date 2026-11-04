@@ -2,6 +2,10 @@
 
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.io.ByteBuffer
+import com.nexustools.genericui.io.FileSystem
+import com.nexustools.genericui.nativeimpl.io.FileReadableNativeImpl
+import com.nexustools.genericui.nativeimpl.io.FileWritableNativeImpl
 import com.nexustools.genericui.nativeimpl.system.UserDirectoryNativeImpl
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.toKString
@@ -30,6 +34,8 @@ class IosUserDirectoryNativeImpl(
 ) : UserDirectoryNativeImpl {
 
     override val fileSeparator: Char = '/'
+
+    override val usesFileSystemBasePath: Boolean = true
 
     override val directoryPath: String = resolveIosDirectory(appName, subdirectory, isCache)
 
@@ -146,6 +152,42 @@ class IosUserDirectoryNativeImpl(
             total += fileSize(name)
         }
         return total
+    }
+
+    override suspend fun readAsync(fileName: String): ByteBuffer? =
+        FileSystem.read(resolveFilePath(fileName)) ?: readBytes(fileName)?.let { ByteBuffer.wrap(it) }
+
+    override suspend fun writeAsync(fileName: String, buffer: ByteBuffer, append: Boolean): Boolean {
+        ensureDirectoryExists()
+        val incoming = buffer.toByteArray()
+        val merged = if (append) {
+            val existing = readBytes(fileName)
+            if (existing == null || existing.isEmpty()) incoming else existing + incoming
+        } else {
+            incoming
+        }
+        val wroteLocal = writeBytes(fileName, merged)
+        val wroteFs = FileSystem.write(resolveFilePath(fileName), ByteBuffer.wrap(merged), append = false)
+        return wroteLocal || wroteFs
+    }
+
+    override suspend fun openReadableAsync(fileName: String): FileReadableNativeImpl? {
+        val bytes = readAsync(fileName)?.toByteArray() ?: return null
+        return IosFileReadableNativeImpl(initialBytes = bytes, filePath = resolveFilePath(fileName))
+    }
+
+    override suspend fun openWritableAsync(fileName: String, append: Boolean): FileWritableNativeImpl {
+        ensureDirectoryExists()
+        val initial = if (append) readAsync(fileName)?.toByteArray() ?: ByteArray(0) else ByteArray(0)
+        return IosFileWritableNativeImpl(
+            initialBytes = initial,
+            filePath = resolveFilePath(fileName),
+            appendMode = append,
+            onCommit = { committed ->
+                writeBytes(fileName, committed)
+                FileSystem.write(resolveFilePath(fileName), ByteBuffer.wrap(committed), append = false)
+            }
+        )
     }
 
     override fun dispose() {
