@@ -1,6 +1,10 @@
 package com.nexustools.genericui.android
 
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import android.widget.TextView
+import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.nativeimpl.action.StyledButtonNativeImpl
@@ -46,17 +50,55 @@ class AndroidStyledButtonImpl(
     private fun syncCurrentVisuals() {
         val current = resolveCurrentVisuals()
         nativeWidget.attributes["styledButtonVisuals"] = current.toString()
-        current.backgroundColor?.let { nativeWidget.attributes["backgroundColor"] = it.toCssRgba() }
+        current.backgroundColor?.let { nativeWidget.attributes["backgroundColor"] = it.toCssRgbaString() }
         current.backgroundGradient?.let { nativeWidget.attributes["backgroundGradient"] = it.toCssString() }
         current.textColor?.let {
-            nativeWidget.attributes["textColor"] = it.toCssRgba()
+            nativeWidget.attributes["textColor"] = it.toCssRgbaString()
             (nativeWidget.androidView as? TextView)?.setTextColor(it.toArgbInt())
         }
-        current.borderColor?.let { nativeWidget.attributes["borderColor"] = it.toCssRgba() }
+        current.borderColor?.let { nativeWidget.attributes["borderColor"] = it.toCssRgbaString() }
         current.borderWidthPx?.let { nativeWidget.attributes["borderWidthPx"] = it.toString() }
         current.borderRadiusPx?.let { nativeWidget.attributes["borderRadiusPx"] = it.toString() }
         current.opacity?.let { setOpacity(it) }
         current.padding?.let { setPadding(it) }
+
+        val blurPx = current.backdropBlurPx ?: current.backdropFilter?.blur?.resolvePx()
+        if (blurPx != null && blurPx > 0f) {
+            nativeWidget.attributes["backdropBlurPx"] = blurPx.toString()
+            nativeWidget.attributes["androidRenderEffect"] = "blur(${blurPx}px)"
+            if (Build.VERSION.SDK_INT >= 31) {
+                runCatching {
+                    nativeWidget.androidView?.setRenderEffect(
+                        RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                    )
+                }
+            }
+        } else {
+            nativeWidget.attributes.remove("backdropBlurPx")
+            nativeWidget.attributes.remove("androidRenderEffect")
+            if (Build.VERSION.SDK_INT >= 31) {
+                runCatching { nativeWidget.androidView?.setRenderEffect(null) }
+            }
+        }
+
+        if (current.backdropFilter != null) {
+            nativeWidget.attributes["backdropFilter"] = current.backdropFilter.toCssString()
+        } else {
+            nativeWidget.attributes.remove("backdropFilter")
+        }
+
+        if (current.boxShadowBlurPx != null && current.boxShadowBlurPx > 0f) {
+            nativeWidget.attributes["boxShadowBlurPx"] = current.boxShadowBlurPx.toString()
+            nativeWidget.androidView?.elevation = current.boxShadowBlurPx
+        } else {
+            nativeWidget.attributes.remove("boxShadowBlurPx")
+        }
+        if (current.boxShadowColor != null) {
+            nativeWidget.attributes["boxShadowColor"] = current.boxShadowColor.toCssRgbaString()
+        } else {
+            nativeWidget.attributes.remove("boxShadowColor")
+        }
+
         if (current.widthPx != null || current.heightPx != null) {
             val w = current.widthPx ?: nativeWidget.bounds.width
             val h = current.heightPx ?: nativeWidget.bounds.height
@@ -150,12 +192,12 @@ class AndroidStyledButtonImpl(
 
     override fun applyComponentStyle(style: ComponentStyle) {
         lastComponentStyle = style
-        super.applyComponentStyle(style)
+        super<AndroidButtonImpl>.applyComponentStyle(style)
         syncVisualsToAndroidView()
     }
 
     override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
-        super.applyComponentBootstrap(bootstrap)
+        super<AndroidButtonImpl>.applyComponentBootstrap(bootstrap)
         syncVisualsToAndroidView()
     }
 
@@ -170,7 +212,7 @@ class AndroidStyledButtonImpl(
         var effective = computedBase.mergeWith(baseVisuals)
         if (!isEnabled()) {
             val computedDisabled = lastComputedStyle?.disabledStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            return effective.mergeWith(computedDisabled).mergeWith(disabledVisuals)
+            return effective.mergeWith(computedDisabled).mergeWith(disabledVisuals).forBackend(LayoutBackendTarget.ANDROID)
         }
         if (hovered) {
             val computedHover = lastComputedStyle?.hoverStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
@@ -184,6 +226,6 @@ class AndroidStyledButtonImpl(
             val computedActive = lastComputedStyle?.activeStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
             effective = effective.mergeWith(computedActive).mergeWith(activeVisuals)
         }
-        return effective
+        return effective.forBackend(LayoutBackendTarget.ANDROID)
     }
 }

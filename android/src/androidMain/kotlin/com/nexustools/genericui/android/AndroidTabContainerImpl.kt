@@ -15,7 +15,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
 
     private val tabImpls = mutableListOf<TabNativeImpl<*>?>()
     private val tabTitles = mutableListOf<String>()
-    private val tabContents = mutableListOf<NativeImpl<*>>()
+    private val tabContents = mutableListOf<NativeImpl<*>?>()
     private var selectedIndexVal: Int = 0
     private var onTabSelectedListener: ((Int) -> Unit)? = null
     private var onTabCloseRequestedListener: ((Int) -> Boolean)? = null
@@ -36,6 +36,23 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             addChildNative(contentImpl, index)
         }
         nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
+        tabContents.forEachIndexed { idx, impl -> impl?.setVisible(idx == selectedIndexVal) }
+    }
+
+    override fun addButtonTabNative(tabImpl: TabNativeImpl<*>, index: Int) {
+        val title = (tabImpl as? AndroidTabImpl)?.titleVal ?: ""
+        if (index < 0 || index >= tabTitles.size) {
+            tabImpls.add(tabImpl)
+            tabTitles.add(title)
+            tabContents.add(null)
+            addChildNative(tabImpl, -1)
+        } else {
+            tabImpls.add(index, tabImpl)
+            tabTitles.add(index, title)
+            tabContents.add(index, null)
+            addChildNative(tabImpl, index)
+        }
+        nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
     }
 
     override fun addTabNative(title: String, contentImpl: NativeImpl<*>, index: Int) {
@@ -51,6 +68,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             addChildNative(contentImpl, index)
         }
         nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
+        tabContents.forEachIndexed { idx, impl -> impl?.setVisible(idx == selectedIndexVal) }
     }
 
     override fun updateTabNative(index: Int, tabImpl: TabNativeImpl<*>) {
@@ -67,7 +85,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         removedTab?.let { removeChildNative(it) }
         tabTitles.removeAt(index)
         val removedContent = tabContents.removeAt(index)
-        removeChildNative(removedContent)
+        removedContent?.let { removeChildNative(it) }
         selectedIndexVal = selectedIndexVal.coerceIn(0, (tabTitles.size - 1).coerceAtLeast(0))
         nativeWidget.attributes["tabTitles"] = tabTitles.joinToString("|")
     }
@@ -90,9 +108,13 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
 
     override fun setSelectedTabIndex(index: Int, fadeTransition: Boolean) {
         if (tabTitles.isNotEmpty() && index !in tabTitles.indices) return
+        if (tabContents.getOrNull(index) == null && tabImpls.getOrNull(index) != null) {
+            onTabSelectedListener?.invoke(index)
+            return
+        }
         selectedIndexVal = index
         tabContents.forEachIndexed { idx, impl ->
-            impl.setVisible(idx == index)
+            impl?.setVisible(idx == index)
         }
         onTabSelectedListener?.invoke(index)
     }

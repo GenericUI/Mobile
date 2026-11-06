@@ -28,6 +28,7 @@ class IosImageImpl : IosBaseNativeImpl("UIImageView", "img-fluid"), ImageNativeI
     private var cssFilter: CssFilter? = null
     private var onLoadCallback: (() -> Unit)? = null
     private var onErrorCallback: (() -> Unit)? = null
+    private var activeLoadGeneration: Int = 0
     private var activeLoadJob: Job? = null
     private var retainedBuffer: ImageBuffer? = null
 
@@ -38,6 +39,14 @@ class IosImageImpl : IosBaseNativeImpl("UIImageView", "img-fluid"), ImageNativeI
     }
 
     override fun setSourceUrl(url: String?) {
+        val trimmed = url?.trim()
+        if (!trimmed.isNullOrEmpty() && trimmed.startsWith("memory://", ignoreCase = true)) {
+            ImageLoader.resolveMemoryBuffer(trimmed)?.let {
+                setImageBuffer(it)
+                return
+            }
+        }
+        val gen = ++activeLoadGeneration
         activeLoadJob?.cancel()
         activeLoadJob = null
         sourceUrl = url
@@ -49,12 +58,16 @@ class IosImageImpl : IosBaseNativeImpl("UIImageView", "img-fluid"), ImageNativeI
                 source = ImageSource.fromUrl(url),
                 options = ImageDecodeOptions(antialiasing = antialiasing),
                 onLoaded = { buf ->
+                    if (gen != activeLoadGeneration) return@launchLoad
                     retainedBuffer = buf
                     loadingState = false
                     nativeWidget.metadata["isLoading"] = "false"
+                    nativeWidget.metadata["imageWidth"] = buf.width.toString()
+                    nativeWidget.metadata["imageHeight"] = buf.height.toString()
                     onLoadCallback?.invoke()
                 },
                 onError = {
+                    if (gen != activeLoadGeneration) return@launchLoad
                     loadingState = false
                     nativeWidget.metadata["isLoading"] = "false"
                     onErrorCallback?.invoke()
@@ -64,11 +77,39 @@ class IosImageImpl : IosBaseNativeImpl("UIImageView", "img-fluid"), ImageNativeI
             loadingState = false
             retainedBuffer = null
             nativeWidget.metadata.remove("sourceUrl")
+            nativeWidget.metadata.remove("imageWidth")
+            nativeWidget.metadata.remove("imageHeight")
             nativeWidget.metadata["isLoading"] = "false"
         }
     }
 
     override fun getSourceUrl(): String? = sourceUrl
+
+    override fun setImageBuffer(buffer: ImageBuffer?) {
+        activeLoadGeneration++
+        activeLoadJob?.cancel()
+        activeLoadJob = null
+        if (buffer == null) {
+            loadingState = false
+            sourceUrl = null
+            retainedBuffer = null
+            nativeWidget.metadata.remove("sourceUrl")
+            nativeWidget.metadata.remove("imageWidth")
+            nativeWidget.metadata.remove("imageHeight")
+            nativeWidget.metadata["isLoading"] = "false"
+            return
+        }
+        val memoryUri = "memory://imagebuffer/${buffer.width}x${buffer.height}@${buffer.hashCode()}"
+        ImageLoader.registerMemoryBuffer(memoryUri, buffer)
+        sourceUrl = memoryUri
+        loadingState = false
+        retainedBuffer = buffer
+        nativeWidget.metadata["sourceUrl"] = memoryUri
+        nativeWidget.metadata["imageWidth"] = buffer.width.toString()
+        nativeWidget.metadata["imageHeight"] = buffer.height.toString()
+        nativeWidget.metadata["isLoading"] = "false"
+        onLoadCallback?.invoke()
+    }
 
     override fun setPlaceholderUrl(url: String?) {
         placeholderUrl = url

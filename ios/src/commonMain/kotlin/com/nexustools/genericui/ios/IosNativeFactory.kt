@@ -44,12 +44,11 @@ import com.nexustools.genericui.nativeimpl.typography.MarkdownViewNativeImpl
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
 
 /**
- * iOS UIKit / CoreGraphics / EAGL / MoltenVK / AVFoundation implementation of [NativeFactory].
+ * iOS UIKit / CoreGraphics / ImageIO implementation of [NativeFactory].
  *
  * Uses `UIDocumentPickerViewController` in file and folder modes ([IosFileBrowserDialogImpl]),
  * `UICollectionView` + `MobileLazyViewportPool` for true lazy loading/unloading ([IosLazyListImpl],
- * [IosLazyGridImpl], [IosTreeViewImpl]), `CADisplayLink` VBlank scheduling with `deltaMs` ([IosCanvas2DImpl],
- * [IosGLCanvasImpl], [IosVKCanvasImpl]), and `ImageIO` / `CGImageSource` hooks for [ImageLoader].
+ * [IosLazyGridImpl], [IosTreeViewImpl]), and `ImageIO` / `CGImageSource` hooks for [ImageLoader].
  */
 class IosNativeFactory : NativeFactory {
     override val backendName: String = "ios"

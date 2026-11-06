@@ -13,7 +13,7 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
     override val supportsNativeFadeTransition: Boolean = true
 
     private val tabImpls = mutableListOf<TabNativeImpl<*>?>()
-    private val tabs = mutableListOf<Pair<String, NativeImpl<*>>>()
+    private val tabs = mutableListOf<Pair<String, NativeImpl<*>?>>()
     private var selectedIndex: Int = 0
     private var onTabSelectedListener: ((Int) -> Unit)? = null
     private var onTabCloseRequestedListener: ((Int) -> Boolean)? = null
@@ -31,8 +31,19 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
             addChildNative(tabImpl, index)
             addChildNative(contentImpl, index)
         }
-        if (tabs.size == 1) {
-            setSelectedTabIndex(0, false)
+        tabs.forEachIndexed { i, (_, impl) -> impl?.setVisible(i == selectedIndex) }
+    }
+
+    override fun addButtonTabNative(tabImpl: TabNativeImpl<*>, index: Int) {
+        val title = (tabImpl as? IosTabImpl)?.titleVal ?: ""
+        if (index < 0 || index >= tabs.size) {
+            tabImpls.add(tabImpl)
+            tabs.add(title to null)
+            addChildNative(tabImpl, -1)
+        } else {
+            tabImpls.add(index, tabImpl)
+            tabs.add(index, title to null)
+            addChildNative(tabImpl, index)
         }
     }
 
@@ -46,9 +57,7 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
             tabs.add(index, title to contentImpl)
             addChildNative(contentImpl, index)
         }
-        if (tabs.size == 1) {
-            setSelectedTabIndex(0, false)
-        }
+        tabs.forEachIndexed { i, (_, impl) -> impl?.setVisible(i == selectedIndex) }
     }
 
     override fun updateTabNative(index: Int, tabImpl: TabNativeImpl<*>) {
@@ -64,7 +73,7 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
         val removedTab = tabImpls.removeAt(index)
         removedTab?.let { removeChildNative(it) }
         val (_, impl) = tabs.removeAt(index)
-        removeChildNative(impl)
+        impl?.let { removeChildNative(it) }
         if (selectedIndex >= tabs.size) {
             selectedIndex = (tabs.size - 1).coerceAtLeast(0)
         }
@@ -86,9 +95,13 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
 
     override fun setSelectedTabIndex(index: Int, fadeTransition: Boolean) {
         if (index !in tabs.indices) return
+        if (tabs[index].second == null && tabImpls.getOrNull(index) != null) {
+            onTabSelectedListener?.invoke(index)
+            return
+        }
         selectedIndex = index
         tabs.forEachIndexed { i, (_, impl) ->
-            impl.setVisible(i == index)
+            impl?.setVisible(i == index)
         }
         onTabSelectedListener?.invoke(index)
     }

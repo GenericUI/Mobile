@@ -1,5 +1,6 @@
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
@@ -10,7 +11,7 @@ import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.theme.SystemThemeDetector
 
 /**
- * iOS `UIView` / `CAGradientLayer` implementation of [StyledContainerNativeImpl].
+ * iOS `UIView` / `CAGradientLayer` / `UIVisualEffectView` implementation of [StyledContainerNativeImpl].
  */
 class IosStyledContainerImpl(
     classPrefix: String = "styled-container"
@@ -53,6 +54,34 @@ class IosStyledContainerImpl(
         }
         visuals.opacity?.let { setOpacity(it) }
         visuals.padding?.let { setPadding(it) }
+
+        val blurPx = visuals.backdropBlurPx ?: visuals.backdropFilter?.blur?.resolvePx()
+        if (blurPx != null && blurPx > 0f) {
+            nativeWidget.metadata["backdropBlurPx"] = blurPx.toString()
+            nativeWidget.metadata["iosBlurEffect"] = "UIBlurEffect"
+        } else {
+            nativeWidget.metadata.remove("backdropBlurPx")
+            nativeWidget.metadata.remove("iosBlurEffect")
+        }
+
+        if (visuals.backdropFilter != null) {
+            nativeWidget.metadata["backdropFilter"] = visuals.backdropFilter.toCssString()
+        } else {
+            nativeWidget.metadata.remove("backdropFilter")
+        }
+
+        if (visuals.boxShadowBlurPx != null && visuals.boxShadowBlurPx > 0f) {
+            nativeWidget.metadata["boxShadowBlurPx"] = visuals.boxShadowBlurPx.toString()
+            nativeWidget.metadata["shadowRadiusPt"] = visuals.boxShadowBlurPx.toString()
+        } else {
+            nativeWidget.metadata.remove("boxShadowBlurPx")
+        }
+        if (visuals.boxShadowColor != null) {
+            nativeWidget.metadata["boxShadowColor"] = visuals.boxShadowColor.toCssRgbaString()
+        } else {
+            nativeWidget.metadata.remove("boxShadowColor")
+        }
+
         if (visuals.widthPx != null || visuals.heightPx != null) {
             val cur = nativeWidget.frame
             val w = visuals.widthPx ?: cur.width
@@ -76,7 +105,7 @@ class IosStyledContainerImpl(
             snapshot = styleSnapshot,
             darkTheme = isDark
         )
-        return computedBase.mergeWith(styledVisuals)
+        return computedBase.mergeWith(styledVisuals).forBackend(LayoutBackendTarget.IOS)
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {

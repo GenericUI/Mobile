@@ -113,6 +113,7 @@ open class IosBaseNativeImpl(
         nativeWidget.metadata["enumClasses"] = enumClasses.joinToString(" ")
 
         val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        nativeWidget.metadata["systemThemeMode"] = if (isDark) "dark" else "light"
         val effectiveType = styleSnapshot.type?.takeIf { it != BootstrapType.NONE } ?: styleSnapshot.backgroundType
         val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
         val fgColor = customStyleTextColor
@@ -519,7 +520,12 @@ open class IosBaseNativeImpl(
         spec: CssTransitionSpec,
         onComplete: () -> Unit
     ): Boolean {
+        nativeWidget.metadata["lastTransitionProperty"] = property
         nativeWidget.metadata["coreAnimation:$property"] = "$fromValue->$toValue@${spec.durationMs}ms"
+        if (property == "opacity") {
+            toValue.toFloatOrNull()?.let { setOpacity(it) }
+        }
+        onComplete()
         return true
     }
 
@@ -565,12 +571,14 @@ open class IosBaseNativeImpl(
     }
 
     fun performClick(): Boolean {
+        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(Float.NaN, Float.NaN, this)) return false
         val listener = onClickListener ?: return false
         listener()
         return true
     }
 
     fun dispatchClick() {
+        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(Float.NaN, Float.NaN, this)) return
         onClickListener?.invoke()
     }
 

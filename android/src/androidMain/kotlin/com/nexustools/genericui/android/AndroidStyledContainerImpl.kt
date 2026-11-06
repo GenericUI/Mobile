@@ -1,6 +1,10 @@
 package com.nexustools.genericui.android
 
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.css.CssBorderStyle
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.geometry.Rect
@@ -17,7 +21,7 @@ import kotlin.math.roundToInt
 
 /**
  * Android implementation of [StyledContainerNativeImpl] using `GradientDrawable` for
- * RGBA alpha backgrounds, linear/radial gradients, and rounded borders.
+ * RGBA alpha backgrounds, linear/radial gradients, rounded borders, and `RenderEffect` blur.
  */
 class AndroidStyledContainerImpl(
     classPrefix: String = "styled-container"
@@ -36,14 +40,59 @@ class AndroidStyledContainerImpl(
     protected fun syncVisualsToAndroidView() {
         val visuals = getStyledVisuals()
         nativeWidget.attributes["styledVisuals"] = visuals.toString()
-        visuals.backgroundColor?.let { nativeWidget.attributes["backgroundColor"] = it.toCssRgba() }
+        visuals.backgroundColor?.let { nativeWidget.attributes["backgroundColor"] = it.toCssRgbaString() }
         visuals.backgroundGradient?.let { nativeWidget.attributes["backgroundGradient"] = it.toCssString() }
-        visuals.textColor?.let { nativeWidget.attributes["textColor"] = it.toCssRgba() }
-        visuals.borderColor?.let { nativeWidget.attributes["borderColor"] = it.toCssRgba() }
+        visuals.textColor?.let { nativeWidget.attributes["textColor"] = it.toCssRgbaString() }
+        visuals.borderColor?.let { nativeWidget.attributes["borderColor"] = it.toCssRgbaString() }
         visuals.borderWidthPx?.let { nativeWidget.attributes["borderWidthPx"] = it.toString() }
         visuals.borderRadiusPx?.let { nativeWidget.attributes["borderRadiusPx"] = it.toString() }
         visuals.opacity?.let { setOpacity(it) }
         visuals.padding?.let { setPadding(it) }
+
+        val blurPx = visuals.backdropBlurPx ?: visuals.backdropFilter?.blur?.resolvePx()
+        if (blurPx != null && blurPx > 0f) {
+            nativeWidget.attributes["backdropBlurPx"] = blurPx.toString()
+            nativeWidget.attributes["androidRenderEffect"] = "blur(${blurPx}px)"
+            if (Build.VERSION.SDK_INT >= 31) {
+                runCatching {
+                    nativeWidget.androidView?.setRenderEffect(
+                        RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                    )
+                }
+            }
+        } else {
+            nativeWidget.attributes.remove("backdropBlurPx")
+            nativeWidget.attributes.remove("androidRenderEffect")
+            if (Build.VERSION.SDK_INT >= 31) {
+                runCatching { nativeWidget.androidView?.setRenderEffect(null) }
+            }
+        }
+
+        if (visuals.backdropFilter != null) {
+            nativeWidget.attributes["backdropFilter"] = visuals.backdropFilter.toCssString()
+        } else {
+            nativeWidget.attributes.remove("backdropFilter")
+        }
+
+        if (visuals.boxShadowBlurPx != null && visuals.boxShadowBlurPx > 0f) {
+            nativeWidget.attributes["boxShadowBlurPx"] = visuals.boxShadowBlurPx.toString()
+            nativeWidget.androidView?.elevation = visuals.boxShadowBlurPx
+        } else {
+            nativeWidget.attributes.remove("boxShadowBlurPx")
+        }
+        if (visuals.boxShadowColor != null) {
+            nativeWidget.attributes["boxShadowColor"] = visuals.boxShadowColor.toCssRgbaString()
+            if (Build.VERSION.SDK_INT >= 28) {
+                val argb = visuals.boxShadowColor.toArgbInt()
+                runCatching {
+                    nativeWidget.androidView?.outlineAmbientShadowColor = argb
+                    nativeWidget.androidView?.outlineSpotShadowColor = argb
+                }
+            }
+        } else {
+            nativeWidget.attributes.remove("boxShadowColor")
+        }
+
         if (visuals.widthPx != null || visuals.heightPx != null) {
             val w = visuals.widthPx ?: nativeWidget.bounds.width
             val h = visuals.heightPx ?: nativeWidget.bounds.height
@@ -67,7 +116,7 @@ class AndroidStyledContainerImpl(
             snapshot = styleSnapshot,
             darkTheme = isDark
         )
-        return computedBase.mergeWith(styledVisuals)
+        return computedBase.mergeWith(styledVisuals).forBackend(LayoutBackendTarget.ANDROID)
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
@@ -78,12 +127,12 @@ class AndroidStyledContainerImpl(
 
     override fun applyComponentStyle(style: ComponentStyle) {
         lastComponentStyle = style
-        super.applyComponentStyle(style)
+        super<AndroidContainerImpl>.applyComponentStyle(style)
         syncVisualsToAndroidView()
     }
 
     override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
-        super.applyComponentBootstrap(bootstrap)
+        super<AndroidContainerImpl>.applyComponentBootstrap(bootstrap)
         syncVisualsToAndroidView()
     }
 

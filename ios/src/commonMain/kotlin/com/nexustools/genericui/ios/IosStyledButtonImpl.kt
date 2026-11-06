@@ -1,5 +1,6 @@
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.nativeimpl.action.StyledButtonNativeImpl
@@ -68,6 +69,34 @@ class IosStyledButtonImpl(
         }
         current.opacity?.let { setOpacity(it) }
         current.padding?.let { setPadding(it) }
+
+        val blurPx = current.backdropBlurPx ?: current.backdropFilter?.blur?.resolvePx()
+        if (blurPx != null && blurPx > 0f) {
+            nativeWidget.metadata["backdropBlurPx"] = blurPx.toString()
+            nativeWidget.metadata["iosBlurEffect"] = "UIBlurEffect"
+        } else {
+            nativeWidget.metadata.remove("backdropBlurPx")
+            nativeWidget.metadata.remove("iosBlurEffect")
+        }
+
+        if (current.backdropFilter != null) {
+            nativeWidget.metadata["backdropFilter"] = current.backdropFilter.toCssString()
+        } else {
+            nativeWidget.metadata.remove("backdropFilter")
+        }
+
+        if (current.boxShadowBlurPx != null && current.boxShadowBlurPx > 0f) {
+            nativeWidget.metadata["boxShadowBlurPx"] = current.boxShadowBlurPx.toString()
+            nativeWidget.metadata["shadowRadiusPt"] = current.boxShadowBlurPx.toString()
+        } else {
+            nativeWidget.metadata.remove("boxShadowBlurPx")
+        }
+        if (current.boxShadowColor != null) {
+            nativeWidget.metadata["boxShadowColor"] = current.boxShadowColor.toCssRgbaString()
+        } else {
+            nativeWidget.metadata.remove("boxShadowColor")
+        }
+
         if (current.widthPx != null || current.heightPx != null) {
             val cur = nativeWidget.frame
             val w = current.widthPx ?: cur.width
@@ -181,7 +210,7 @@ class IosStyledButtonImpl(
         var effective = computedBase.mergeWith(baseVisuals)
         if (!isEnabled()) {
             val computedDisabled = lastComputedStyle?.disabledStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            return effective.mergeWith(computedDisabled).mergeWith(disabledVisuals)
+            return effective.mergeWith(computedDisabled).mergeWith(disabledVisuals).forBackend(LayoutBackendTarget.IOS)
         }
         if (hovered) {
             val computedHover = lastComputedStyle?.hoverStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
@@ -195,6 +224,6 @@ class IosStyledButtonImpl(
             val computedActive = lastComputedStyle?.activeStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
             effective = effective.mergeWith(computedActive).mergeWith(activeVisuals)
         }
-        return effective
+        return effective.forBackend(LayoutBackendTarget.IOS)
     }
 }

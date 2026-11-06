@@ -28,6 +28,7 @@ class AndroidImageImpl : AndroidBaseNativeImpl("androidx.appcompat.widget.AppCom
     private var cssFilter: CssFilter? = null
     private var onLoadCallback: (() -> Unit)? = null
     private var onErrorCallback: (() -> Unit)? = null
+    private var activeLoadGeneration: Int = 0
     private var activeLoadJob: Job? = null
     private var retainedBuffer: ImageBuffer? = null
 
@@ -36,7 +37,32 @@ class AndroidImageImpl : AndroidBaseNativeImpl("androidx.appcompat.widget.AppCom
         nativeWidget.attributes["filterBitmap"] = "true"
     }
 
+    private fun toAndroidBitmap(buffer: ImageBuffer): android.graphics.Bitmap? = runCatching {
+        val w = buffer.width.coerceAtLeast(1)
+        val h = buffer.height.coerceAtLeast(1)
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            val rowOff = y * w
+            for (x in 0 until w) {
+                val px = buffer.getPixel(x, y)
+                pixels[rowOff + x] = ((px.a and 0xFF) shl 24) or
+                    ((px.r and 0xFF) shl 16) or
+                    ((px.g and 0xFF) shl 8) or
+                    (px.b and 0xFF)
+            }
+        }
+        android.graphics.Bitmap.createBitmap(pixels, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    }.getOrNull()
+
     override fun setSourceUrl(url: String?) {
+        val trimmed = url?.trim()
+        if (!trimmed.isNullOrEmpty() && trimmed.startsWith("memory://", ignoreCase = true)) {
+            ImageLoader.resolveMemoryBuffer(trimmed)?.let {
+                setImageBuffer(it)
+                return
+            }
+        }
+        val gen = ++activeLoadGeneration
         activeLoadJob?.cancel()
         activeLoadJob = null
         sourceUrl = url
@@ -48,12 +74,19 @@ class AndroidImageImpl : AndroidBaseNativeImpl("androidx.appcompat.widget.AppCom
                 source = ImageSource.fromUrl(url),
                 options = ImageDecodeOptions(antialiasing = antialiasing),
                 onLoaded = { buf ->
+                    if (gen != activeLoadGeneration) return@launchLoad
                     retainedBuffer = buf
                     loadingState = false
                     nativeWidget.attributes["isLoading"] = "false"
+                    nativeWidget.attributes["imageWidth"] = buf.width.toString()
+                    nativeWidget.attributes["imageHeight"] = buf.height.toString()
+                    (nativeWidget.androidView as? android.widget.ImageView)?.let { iv ->
+                        toAndroidBitmap(buf)?.let { bmp -> runCatching { iv.setImageBitmap(bmp) } }
+                    }
                     onLoadCallback?.invoke()
                 },
                 onError = {
+                    if (gen != activeLoadGeneration) return@launchLoad
                     loadingState = false
                     nativeWidget.attributes["isLoading"] = "false"
                     onErrorCallback?.invoke()
@@ -63,11 +96,48 @@ class AndroidImageImpl : AndroidBaseNativeImpl("androidx.appcompat.widget.AppCom
             loadingState = false
             retainedBuffer = null
             nativeWidget.attributes.remove("imageUri")
+            nativeWidget.attributes.remove("imageWidth")
+            nativeWidget.attributes.remove("imageHeight")
             nativeWidget.attributes["isLoading"] = "false"
+            (nativeWidget.androidView as? android.widget.ImageView)?.let { iv ->
+                runCatching { iv.setImageDrawable(null) }
+            }
         }
     }
 
     override fun getSourceUrl(): String? = sourceUrl
+
+    override fun setImageBuffer(buffer: ImageBuffer?) {
+        activeLoadGeneration++
+        activeLoadJob?.cancel()
+        activeLoadJob = null
+        if (buffer == null) {
+            loadingState = false
+            sourceUrl = null
+            retainedBuffer = null
+            nativeWidget.attributes.remove("imageUri")
+            nativeWidget.attributes.remove("imageWidth")
+            nativeWidget.attributes.remove("imageHeight")
+            nativeWidget.attributes["isLoading"] = "false"
+            (nativeWidget.androidView as? android.widget.ImageView)?.let { iv ->
+                runCatching { iv.setImageDrawable(null) }
+            }
+            return
+        }
+        val memoryUri = "memory://imagebuffer/${buffer.width}x${buffer.height}@${buffer.hashCode()}"
+        ImageLoader.registerMemoryBuffer(memoryUri, buffer)
+        sourceUrl = memoryUri
+        loadingState = false
+        retainedBuffer = buffer
+        nativeWidget.attributes["imageUri"] = memoryUri
+        nativeWidget.attributes["imageWidth"] = buffer.width.toString()
+        nativeWidget.attributes["imageHeight"] = buffer.height.toString()
+        nativeWidget.attributes["isLoading"] = "false"
+        (nativeWidget.androidView as? android.widget.ImageView)?.let { iv ->
+            toAndroidBitmap(buffer)?.let { bmp -> runCatching { iv.setImageBitmap(bmp) } }
+        }
+        onLoadCallback?.invoke()
+    }
 
     override fun setPlaceholderUrl(url: String?) {
         placeholderUrl = url

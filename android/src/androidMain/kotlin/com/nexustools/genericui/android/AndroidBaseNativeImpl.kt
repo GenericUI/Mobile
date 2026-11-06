@@ -140,6 +140,7 @@ open class AndroidBaseNativeImpl(
         nativeWidget.attributes["enumClasses"] = enumClasses.joinToString(" ")
 
         val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        nativeWidget.attributes["systemThemeMode"] = if (isDark) "dark" else "light"
         val effectiveType = styleSnapshot.type ?: styleSnapshot.backgroundType
         val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
         val fgColor = customStyleTextColor
@@ -539,7 +540,16 @@ open class AndroidBaseNativeImpl(
         spec: CssTransitionSpec,
         onComplete: () -> Unit
     ): Boolean {
-        val view = nativeWidget.androidView ?: return true
+        nativeWidget.attributes["lastTransitionProperty"] = property
+        nativeWidget.attributes["viewPropertyAnimator:$property"] = "$fromValue->$toValue@${spec.durationMs}ms"
+        val view = nativeWidget.androidView
+        if (view == null) {
+            if (property == "opacity") {
+                toValue.toFloatOrNull()?.let { setOpacity(it) }
+            }
+            onComplete()
+            return true
+        }
         val anim = view.animate()
             .setDuration(spec.durationMs.toLong())
             .setStartDelay(spec.delayMs.toLong())
@@ -662,12 +672,14 @@ open class AndroidBaseNativeImpl(
     }
 
     fun performClick(): Boolean {
+        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(lastTouchX, lastTouchY, this)) return false
         val listener = onClickListener ?: return false
         listener()
         return true
     }
 
     fun dispatchClick() {
+        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(lastTouchX, lastTouchY, this)) return
         onClickListener?.invoke()
     }
 
@@ -691,6 +703,9 @@ open class AndroidBaseNativeImpl(
                     touchStartY = y
                     touchDownTimestampMs = eventTime
                     longPressFiredForTouch = false
+                    if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerDown(x, y, this)) {
+                        return@setOnTouchListener true
+                    }
                     gestureRecognizer.onPointerDown(pointerId, x, y, eventTime)
                     onPointerDownListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                 }
@@ -707,6 +722,10 @@ open class AndroidBaseNativeImpl(
                     onPointerMoveListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                 }
                 MotionEvent.ACTION_UP -> {
+                    if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerUp(x, y, this)) {
+                        com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(x, y, this)
+                        return@setOnTouchListener true
+                    }
                     val dist = hypot(x - touchStartX, y - touchStartY)
                     if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
                         (eventTime - touchDownTimestampMs) >= 500L
