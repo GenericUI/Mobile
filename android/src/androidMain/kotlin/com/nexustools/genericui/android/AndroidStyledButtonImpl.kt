@@ -54,7 +54,10 @@ class AndroidStyledButtonImpl(
         current.backgroundGradient?.let { nativeWidget.attributes["backgroundGradient"] = it.toCssString() }
         current.textColor?.let {
             nativeWidget.attributes["textColor"] = it.toCssRgbaString()
-            (nativeWidget.androidView as? TextView)?.setTextColor(it.toArgbInt())
+            nativeWidget.attributes["iconTint"] = it.toCssRgbaString()
+            runCatching {
+                (nativeWidget.androidView as? TextView)?.setTextColor(it.toArgbInt())
+            }
         }
         current.borderColor?.let { nativeWidget.attributes["borderColor"] = it.toCssRgbaString() }
         current.borderWidthPx?.let { nativeWidget.attributes["borderWidthPx"] = it.toString() }

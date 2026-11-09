@@ -4,8 +4,9 @@
 `:mobile:ios` is the native iOS UIKit backend for GenericUI (`iosX64`, `iosArm64`, `iosSimulatorArm64`).
 
 ### Key Highlights
-- **Genuine UIKit System Controls (`BootstrapType.NONE` Default)**: When `getBootstrap().type == BootstrapType.NONE` (the default), controls render as untinted native UIKit `UIView` / `UIControl` widgets with zero Bootstrap CSS styling.
-- **Semantic `BootstrapType` Tinting**: Setting `DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, or `LINK` tints the native UIKit control with the semantic color (`outline = true/false`). Unsupported CSS properties and transitions are silently ignored.
+- **Genuine UIKit System Controls (`BootstrapType.NONE` Default)**: When `getBootstrap().type == BootstrapType.NONE` (the default), controls render as 100% unmodified native UIKit `UIView` / `UIControl` widgets with zero Bootstrap CSS styling.
+- **Native UIKit Control Tinting via `ThemeConfig` (`BootstrapType != NONE`)**: Setting `PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, or `DARK` tints the native UIKit control (`UIButton.Configuration` / `tintColor`) using the active `ThemeConfig` / `BootstrapColorPalette` while preserving native UIKit borders, bevels, and states (`outline = true/false`).
+- **System Backend Typography vs. Aesthetic Style Restraints**: Typography styles (`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `color`, `lineHeight`, `letterSpacing`, `textAlign`, etc.) are honored on text elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`). Aesthetic skinning and font overrides on `ComponentStyle` are **silently ignored** on standard controls/containers (which can only be tinted via `BootstrapType`), while `StyledContainer` and `StyledButton` honor full `ComponentStyle` aesthetics.
 - **Strict User CSS Class Isolation**: `getClasses()`, `getClass()`, and `hasClass()` return only user-added `customClasses`.
 - **Live System Theme Detection (`ThemeMode.AUTO`)**: Tracks `UITraitCollection.currentTraitCollection.userInterfaceStyle` (`UIUserInterfaceStyleDark` vs. `UIUserInterfaceStyleLight`) and updates `UIWindow.overrideUserInterfaceStyle`.
 

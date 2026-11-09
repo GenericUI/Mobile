@@ -1,5 +1,7 @@
 package com.nexustools.genericui.android
 
+import android.view.Menu
+import androidx.appcompat.widget.PopupMenu
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.nativeimpl.layout.DividerNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.ContextMenuNativeImpl
@@ -26,6 +28,8 @@ class AndroidContextMenuImpl : AndroidBaseContainerNativeImpl("androidx.appcompa
         private set
     var isPopupShowing: Boolean = false
         private set
+
+    private var activePopupMenu: PopupMenu? = null
 
     override fun addChildNative(childImpl: NativeImpl<*>, index: Int) {
         super.addChildNative(childImpl, index)
@@ -101,11 +105,44 @@ class AndroidContextMenuImpl : AndroidBaseContainerNativeImpl("androidx.appcompa
         nativeWidget.attributes["popupX"] = x.toString()
         nativeWidget.attributes["popupY"] = y.toString()
         setVisible(true)
+
+        runCatching {
+            val anchorView = (anchor?.nativeWidget as? AndroidViewHandle)?.androidView
+                ?: AndroidFileBrowserDialogImpl.activeHostActivity?.window?.decorView
+                ?: return@runCatching
+            val ctx = anchorView.context ?: AndroidViewHandle.activeContext ?: return@runCatching
+            val popup = PopupMenu(ctx, anchorView)
+            childItems.forEachIndexed { idx, child ->
+                when (child) {
+                    is MenuItemNativeImpl<*> -> {
+                        val item = popup.menu.add(Menu.NONE, idx, idx, child.getLabel())
+                        item.isEnabled = (child as? AndroidBaseNativeImpl)?.isEnabled() ?: true
+                    }
+                    is MenuNativeImpl<*> -> {
+                        val item = popup.menu.add(Menu.NONE, idx, idx, child.getLabel())
+                        item.isEnabled = (child as? AndroidBaseNativeImpl)?.isEnabled() ?: true
+                    }
+                }
+            }
+            popup.setOnMenuItemClickListener { menuItem ->
+                triggerItemAt(menuItem.itemId)
+                true
+            }
+            popup.setOnDismissListener {
+                isPopupShowing = false
+            }
+            activePopupMenu = popup
+            popup.show()
+        }
     }
 
     override fun hide() {
         isPopupShowing = false
         setVisible(false)
+        runCatching {
+            activePopupMenu?.dismiss()
+            activePopupMenu = null
+        }
     }
 
     private fun syncMenuMetadata() {

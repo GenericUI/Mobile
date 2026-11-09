@@ -42,6 +42,7 @@ import com.nexustools.genericui.nativeimpl.shell.*
 import com.nexustools.genericui.nativeimpl.system.*
 import com.nexustools.genericui.nativeimpl.typography.MarkdownViewNativeImpl
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
+import com.nexustools.genericui.threading.UiThreadDispatcherNativeImpl
 
 /**
  * Android View / Material3 / OpenGL ES / Vulkan / Storage Access Framework implementation of [NativeFactory].
@@ -149,6 +150,7 @@ class AndroidNativeFactory(
     override fun createTreeView(): TreeViewNativeImpl<*> = AndroidTreeViewImpl()
 
     // System Services
+    override fun createUiThreadDispatcher(): UiThreadDispatcherNativeImpl = AndroidUiThreadDispatcherNativeImpl()
     override fun createUiTimerScheduler(): UiTimerNativeImpl = AndroidUiTimerImpl()
     override fun createPermissionManager(): PermissionManagerNativeImpl = AndroidPermissionManagerImpl()
     override fun createSystemTray(): SystemTrayNativeImpl = AndroidSystemTrayImpl()

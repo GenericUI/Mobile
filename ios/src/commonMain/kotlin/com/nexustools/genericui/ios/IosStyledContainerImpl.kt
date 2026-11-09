@@ -116,12 +116,12 @@ class IosStyledContainerImpl(
 
     override fun applyComponentStyle(style: ComponentStyle) {
         lastComponentStyle = style
-        super.applyComponentStyle(style)
+        super<IosContainerImpl>.applyComponentStyle(style)
         syncVisualsToIosView()
     }
 
     override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
-        super.applyComponentBootstrap(bootstrap)
+        super<IosContainerImpl>.applyComponentBootstrap(bootstrap)
         syncVisualsToIosView()
     }
 }

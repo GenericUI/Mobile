@@ -2,32 +2,40 @@ package com.nexustools.genericui.android
 
 import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.navigation.NavigationBarView
 import com.nexustools.genericui.component.fragment.Fragment
 import com.nexustools.genericui.component.fragment.FragmentBundle
+import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.component.shell.Window
 import com.nexustools.genericui.core.AbstractComponent
 import com.nexustools.genericui.core.GenericUI
+import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.enums.window.DisplayCutoutMode
 import com.nexustools.genericui.mobile.layout.MobileAdaptiveFragmentCoordinator
 import com.nexustools.genericui.mobile.system.MobileLifecycleBridge
 import com.nexustools.genericui.mobile.system.MobilePipController
 import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
+import com.nexustools.genericui.style.color.BootstrapColorPalette
 import com.nexustools.genericui.window.PipConfig
 
 /**
@@ -51,9 +59,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         if (GenericUI.activeFactory == null) {
             GenericUI.initialize(AndroidNativeFactory())
         }
-        Window(title = "GenericUI").also { win ->
-            win.show(GenericUI.activeFactory)
-        }
+        Window(title = "GenericUI")
     }
 
     val activityWindowImpl: AndroidWindowImpl =
@@ -80,6 +86,9 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
     var isToolbarInRootLayout: Boolean = false
         private set
 
+    private var suppressBottomNavListener: Boolean = false
+    private var lastSyncedBottomNavSignature: String = ""
+
     /**
      * Subclasses override this method to provide the root GenericUI [Fragment] hosted by this Activity.
      */
@@ -87,17 +96,34 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        AndroidViewHandle.activeContext = applicationContext
+        AndroidViewHandle.activeContext = this
         AndroidPreferenceStoreImpl.applicationContext = applicationContext
         AndroidFileBrowserDialogImpl.activeHostActivity = this
 
         if (GenericUI.activeFactory == null) {
-            GenericUI.initialize(AndroidNativeFactory(applicationContext))
+            GenericUI.initialize(AndroidNativeFactory(this))
+        }
+        AndroidActivityRegistry.activeDescriptor?.let { desc ->
+            AndroidLauncher.ensureApplicationConfigured(desc)
         }
         AndroidActivityRegistry.installAsPlatformLauncher()
+        requestPostNotificationsPermissionIfNeeded()
+
+        val isDark = AndroidViewHandle.isDarkTheme()
+        val windowBgArgb = if (isDark) 0xFF121318.toInt() else 0xFFF6F7FB.toInt()
+        val chromeBgArgb = if (isDark) 0xFF1A1D24.toInt() else 0xFFFFFFFF.toInt()
+        val chromeTitleArgb = if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
+        val primaryArgb = BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, isDark).toArgbInt()
+        val inactiveNavArgb = if (isDark) 0xFF8892A6.toInt() else 0xFF6C757D.toInt()
+
+        runCatching {
+            window?.statusBarColor = chromeBgArgb
+            window?.navigationBarColor = chromeBgArgb
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(windowBgArgb)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -105,8 +131,12 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         }
         val toolbar = MaterialToolbar(this).apply {
             visibility = View.GONE
+            setBackgroundColor(chromeBgArgb)
+            setTitleTextColor(chromeTitleArgb)
+            elevation = AndroidViewHandle.dpToPxFloat(3f)
         }
         val content = FrameLayout(this).apply {
+            setBackgroundColor(windowBgArgb)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -115,6 +145,16 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         }
         val bottomNav = BottomNavigationView(this).apply {
             visibility = View.GONE
+            setBackgroundColor(chromeBgArgb)
+            labelVisibilityMode = NavigationBarView.LABEL_VISIBILITY_LABELED
+            val states = arrayOf(
+                intArrayOf(android.R.attr.state_checked),
+                intArrayOf(-android.R.attr.state_checked)
+            )
+            val colors = intArrayOf(primaryArgb, inactiveNavArgb)
+            val colorStateList = ColorStateList(states, colors)
+            itemIconTintList = colorStateList
+            itemTextColor = colorStateList
         }
 
         // Navbar-as-TitleBar Rule: do NOT add toolbar to root unless TitleBar, MenuBar, or NavBar is set
@@ -144,11 +184,20 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         savedState: FragmentBundle? = null
     ): Fragment {
         hostedFragment = fragment
+        AndroidActivityRegistry.activeDescriptor?.let { desc ->
+            AndroidLauncher.ensureApplicationConfigured(desc)
+        }
+        Application.current?.let { app ->
+            fragment.application = app
+        }
         val resolvedLaunchArgs = launchArgs ?: fragment.arguments
         if (resolvedLaunchArgs != null) {
             fragment.arguments = resolvedLaunchArgs
         }
         bindFragmentToActivityWindow(fragment)
+        runCatching {
+            activityWindow.setContent(fragment)
+        }
 
         val effectiveBundle: FragmentBundle? = when {
             resolvedLaunchArgs != null && savedState != null -> FragmentBundle().apply {
@@ -160,8 +209,37 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         }
 
         lifecycleBridge.attachFragment(fragment, effectiveBundle)
+        runCatching {
+            val app = Application.current
+            if (app != null) {
+                for (sheet in app.getStyleSheets()) {
+                    sheet.styleSheet.applyToTree(fragment)
+                }
+            }
+        }
+        runCatching {
+            activityWindow.show(GenericUI.activeFactory)
+        }
+        mountFragmentAndroidView(fragment)
         syncFragmentChrome(fragment)
         return fragment
+    }
+
+    private fun mountFragmentAndroidView(fragment: Fragment) {
+        runCatching {
+            val container = contentContainer ?: return@runCatching
+            val fragmentImpl = fragment.ensureNativeImpl() as? AndroidBaseNativeImpl ?: return@runCatching
+            val fragmentView = fragmentImpl.ensureAndroidView(this) ?: return@runCatching
+            (fragmentView.parent as? ViewGroup)?.removeView(fragmentView)
+            container.removeAllViews()
+            container.addView(
+                fragmentView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
     }
 
     override fun onStart() {
@@ -171,6 +249,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AndroidViewHandle.activeContext = this
         AndroidFileBrowserDialogImpl.activeHostActivity = this
         lifecycleBridge.dispatchResume()
         hostedFragment?.let { syncFragmentChrome(it) }
@@ -330,6 +409,12 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
                     root.addView(tb, 0)
                 }
                 tb.visibility = View.VISIBLE
+                val activeNavbarImpl = activityWindowImpl.activeNavbar
+                    ?: (navBar?.ensureNativeImpl() as? AndroidNavbarImpl)
+                activeNavbarImpl?.onNavbarChanged = {
+                    runCatching { runOnUiThread { syncToolbarWithNavbar(tb, activeNavbarImpl, fragment) } }
+                }
+                syncToolbarWithNavbar(tb, activeNavbarImpl, fragment)
             } else {
                 if (root != null && tb.parent === root) {
                     root.removeView(tb)
@@ -341,8 +426,105 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         bottomNavigationView?.let { bn ->
             if (!fullscreen && bottomNav != null) {
                 bn.visibility = View.VISIBLE
+                val bottomNavImpl = bottomNav.ensureNativeImpl() as? AndroidBottomNavigationBarImpl
+                if (bottomNavImpl != null) {
+                    bottomNavImpl.onBarChanged = {
+                        runCatching { runOnUiThread { syncBottomNavigationBar(bn, bottomNavImpl) } }
+                    }
+                    syncBottomNavigationBar(bn, bottomNavImpl)
+                }
             } else {
                 bn.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun syncToolbarWithNavbar(
+        tb: MaterialToolbar,
+        navbarImpl: AndroidNavbarImpl?,
+        fragment: Fragment
+    ) {
+        runCatching {
+            if (navbarImpl == null) {
+                tb.title = fragment.pageTitle
+                return@runCatching
+            }
+            val brand = navbarImpl.getBrandTitle()
+            if (navbarImpl.items.isNotEmpty()) {
+                tb.title = brand
+                val navView = navbarImpl.ensureAndroidView(this)
+                if (navView != null) {
+                    if (navView.parent !== tb) {
+                        (navView.parent as? ViewGroup)?.removeView(navView)
+                        val lp = Toolbar.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
+                        tb.addView(navView, lp)
+                    }
+                    navView.requestLayout()
+                }
+            } else {
+                tb.title = brand.ifBlank { fragment.pageTitle }
+            }
+        }
+    }
+
+    private fun syncBottomNavigationBar(
+        bn: BottomNavigationView,
+        bottomNavImpl: AndroidBottomNavigationBarImpl
+    ) {
+        runCatching {
+            val items = bottomNavImpl.itemsList
+            val signature = items.joinToString("|") { "${it.first}:${it.second}:${it.third.orEmpty()}" }
+            suppressBottomNavListener = true
+            try {
+                if (signature != lastSyncedBottomNavSignature || bn.menu.size() != items.size) {
+                    lastSyncedBottomNavSignature = signature
+                    bn.menu.clear()
+                    items.forEachIndexed { idx, triple ->
+                        val itemIdInt = idx + 1000
+                        val menuItem = bn.menu.add(Menu.NONE, itemIdInt, idx, triple.second)
+                        val iconSource = triple.third
+                        if (!iconSource.isNullOrBlank()) {
+                            val iconDrawable = AndroidImageImpl.resolveDrawable(this, iconSource, null)
+                            if (iconDrawable != null) {
+                                menuItem.icon = iconDrawable
+                            }
+                        }
+                    }
+                }
+                val selectedKey = bottomNavImpl.getSelectedItemId()
+                val selectedIdx = items.indexOfFirst { it.first == selectedKey }
+                if (selectedIdx >= 0) {
+                    val targetMenuId = selectedIdx + 1000
+                    if (bn.selectedItemId != targetMenuId) {
+                        bn.selectedItemId = targetMenuId
+                    }
+                }
+            } finally {
+                suppressBottomNavListener = false
+            }
+
+            bn.setOnItemSelectedListener { menuItem ->
+                if (suppressBottomNavListener) return@setOnItemSelectedListener true
+                val idx = menuItem.itemId - 1000
+                val entry = bottomNavImpl.itemsList.getOrNull(idx)
+                if (entry != null) {
+                    bottomNavImpl.dispatchItemSelectedFromView(entry.first)
+                }
+                true
+            }
+        }
+    }
+
+    private fun requestPostNotificationsPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            runCatching {
+                val perm = "android.permission.POST_NOTIFICATIONS"
+                if (checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(perm), 1001)
+                }
             }
         }
     }

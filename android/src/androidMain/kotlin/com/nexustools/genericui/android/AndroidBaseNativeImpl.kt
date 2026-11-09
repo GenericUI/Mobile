@@ -1,6 +1,8 @@
 package com.nexustools.genericui.android
 
+import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -57,9 +59,23 @@ open class AndroidBaseNativeImpl(
 
     protected var customStyleBackgroundColor: RgbaColor? = null
     protected var customStyleTextColor: RgbaColor? = null
+    protected var customStyleBorderColor: RgbaColor? = null
+    protected var customStyleBorderWidthPx: Float? = null
+    protected var customStyleBorderRadiusPx: Float? = null
+    protected var customStyleFontSizePx: Float? = null
+    protected var customStyleFontWeightNumeric: Int? = null
+    protected var explicitGapDp: Int? = null
+    protected var baseComponentStyle: ComponentStyle? = null
+    protected var baseComputedStyle: ComputedStyle? = null
+
+    protected open fun allowsSystemAestheticStyles(): Boolean =
+        this is AndroidStyledContainerImpl || this is AndroidStyledButtonImpl
+
+    protected open fun allowsSystemTypographyStyles(): Boolean =
+        allowsSystemAestheticStyles() || this is AndroidTextImpl || this is AndroidMarkdownViewImpl
 
     private var tooltipTextValue: String? = null
-    private var preferredSizeValue: Size? = null
+    protected var preferredSizeValue: Size? = null
 
     private var lastTouchX: Float = 0f
     private var lastTouchY: Float = 0f
@@ -82,7 +98,16 @@ open class AndroidBaseNativeImpl(
     protected var onKeyDownListener: ((KeyEvent) -> Unit)? = null
     protected var onKeyUpListener: ((KeyEvent) -> Unit)? = null
 
+    protected open fun createDefaultAndroidView(context: Context): View? = View(context)
+
+    protected open fun shouldApplyBaseBackgroundDrawable(): Boolean = true
+
     init {
+        if (initialView == null) {
+            AndroidViewHandle.activeContext?.let { ctx ->
+                nativeWidget.androidView = runCatching { createDefaultAndroidView(ctx) }.getOrNull()
+            }
+        }
         syncNativeBootstrapAppearance()
         gestureRecognizer.onLongPress = { x, y ->
             if (!longPressFiredForTouch) {
@@ -95,11 +120,23 @@ open class AndroidBaseNativeImpl(
         }
     }
 
+    internal open fun ensureAndroidView(context: Context? = AndroidViewHandle.activeContext): View? {
+        if (nativeWidget.androidView == null && context != null) {
+            nativeWidget.androidView = runCatching { createDefaultAndroidView(context) }.getOrNull()
+            if (nativeWidget.androidView != null) {
+                syncNativeBootstrapAppearance()
+                syncAndroidView()
+            }
+        }
+        return nativeWidget.androidView
+    }
+
     override fun setClass(className: String) {
         val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
         styleSnapshot = styleSnapshot.copy(customClasses = tokens)
         nativeWidget.classes.clear()
         nativeWidget.classes.addAll(tokens)
+        syncAndroidView()
     }
 
     override fun getClass(): String =
@@ -116,6 +153,7 @@ open class AndroidBaseNativeImpl(
         styleSnapshot = styleSnapshot.copy(customClasses = updated)
         nativeWidget.classes.clear()
         nativeWidget.classes.addAll(updated)
+        syncAndroidView()
     }
 
     override fun removeClass(className: String) {
@@ -126,6 +164,7 @@ open class AndroidBaseNativeImpl(
         styleSnapshot = styleSnapshot.copy(customClasses = updated)
         nativeWidget.classes.clear()
         nativeWidget.classes.addAll(updated)
+        syncAndroidView()
     }
 
     override fun hasClass(className: String): Boolean {
@@ -140,34 +179,46 @@ open class AndroidBaseNativeImpl(
         nativeWidget.attributes["enumClasses"] = enumClasses.joinToString(" ")
 
         val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val activeTheme = BootstrapColorPalette.activeThemeConfig
         nativeWidget.attributes["systemThemeMode"] = if (isDark) "dark" else "light"
         val effectiveType = styleSnapshot.type ?: styleSnapshot.backgroundType
-        val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
-        val fgColor = customStyleTextColor
-            ?: styleSnapshot.textColorType?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val tintColor = (if (allowAesthetic) customStyleBackgroundColor else null)
+            ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark, activeTheme)
+        val fgColor = (if (allowTypography) customStyleTextColor else null)
+            ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let {
+                BootstrapColorPalette.resolveColor(it, isDark, activeTheme)
+            }
             ?: styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
-                BootstrapColorPalette.resolveForegroundOn(it)
+                BootstrapColorPalette.resolveForegroundOn(it, isDark, activeTheme)
             }
 
         if (tintColor == null) {
             nativeWidget.attributes["useSystemControlAppearance"] = "true"
             nativeWidget.attributes.remove("bootstrapTintColor")
-            nativeWidget.androidView?.backgroundTintList = null
+            AndroidViewHandle.runOnMainThread {
+                runCatching { nativeWidget.androidView?.backgroundTintList = null }
+            }
         } else {
             nativeWidget.attributes["useSystemControlAppearance"] = "false"
             nativeWidget.attributes["bootstrapTintColor"] = tintColor.toHex()
-            nativeWidget.androidView?.let { view ->
-                runCatching {
-                    view.backgroundTintList = ColorStateList.valueOf(tintColor.toArgbInt())
-                }.onFailure {
-                    view.setBackgroundColor(tintColor.toArgbInt())
+            AndroidViewHandle.runOnMainThread {
+                nativeWidget.androidView?.let { view ->
+                    runCatching {
+                        view.backgroundTintList = ColorStateList.valueOf(tintColor.toArgbInt())
+                    }.onFailure {
+                        runCatching { view.setBackgroundColor(tintColor.toArgbInt()) }
+                    }
                 }
             }
         }
 
         if (fgColor != null) {
             nativeWidget.attributes["bootstrapForegroundColor"] = fgColor.toHex()
-            (nativeWidget.androidView as? TextView)?.setTextColor(fgColor.toArgbInt())
+            AndroidViewHandle.runOnMainThread {
+                runCatching { (nativeWidget.androidView as? TextView)?.setTextColor(fgColor.toArgbInt()) }
+            }
         } else {
             nativeWidget.attributes.remove("bootstrapForegroundColor")
         }
@@ -175,10 +226,7 @@ open class AndroidBaseNativeImpl(
         when (val w = styleSnapshot.width) {
             BootstrapWidth.W_100, BootstrapWidth.VW_100, BootstrapWidth.MIN_VW_100 -> {
                 nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
-                nativeWidget.androidView?.layoutParams?.let { lp ->
-                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT
-                    nativeWidget.androidView?.layoutParams = lp
-                }
+                nativeWidget.fillMaxWidth = true
             }
             BootstrapWidth.W_25, BootstrapWidth.W_50, BootstrapWidth.W_75 -> {
                 nativeWidget.attributes["layoutWidth"] = "${((w.fraction ?: 1f) * 100f).roundToInt()}%"
@@ -192,10 +240,7 @@ open class AndroidBaseNativeImpl(
         when (val h = styleSnapshot.height) {
             BootstrapHeight.H_100, BootstrapHeight.VH_100, BootstrapHeight.MIN_VH_100 -> {
                 nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
-                nativeWidget.androidView?.layoutParams?.let { lp ->
-                    lp.height = ViewGroup.LayoutParams.MATCH_PARENT
-                    nativeWidget.androidView?.layoutParams = lp
-                }
+                nativeWidget.fillMaxHeight = true
             }
             BootstrapHeight.H_25, BootstrapHeight.H_50, BootstrapHeight.H_75 -> {
                 nativeWidget.attributes["layoutHeight"] = "${((h.fraction ?: 1f) * 100f).roundToInt()}%"
@@ -220,12 +265,16 @@ open class AndroidBaseNativeImpl(
         when (styleSnapshot.visibility) {
             BootstrapVisibility.INVISIBLE -> {
                 nativeWidget.attributes["visibility"] = "INVISIBLE"
-                nativeWidget.androidView?.visibility = View.INVISIBLE
+                AndroidViewHandle.runOnMainThread {
+                    runCatching { nativeWidget.androidView?.visibility = View.INVISIBLE }
+                }
             }
             BootstrapVisibility.VISIBLE -> {
                 nativeWidget.attributes["visibility"] = "VISIBLE"
                 if (nativeWidget.visible) {
-                    nativeWidget.androidView?.visibility = View.VISIBLE
+                    AndroidViewHandle.runOnMainThread {
+                        runCatching { nativeWidget.androidView?.visibility = View.VISIBLE }
+                    }
                 }
             }
             null -> nativeWidget.attributes.remove("visibility")
@@ -265,11 +314,198 @@ open class AndroidBaseNativeImpl(
                 ShadowElevation.LARGE -> 12f
             }
             nativeWidget.attributes["elevation"] = elev.toString()
-            nativeWidget.androidView?.elevation = elev
+            AndroidViewHandle.runOnMainThread {
+                runCatching { nativeWidget.androidView?.elevation = elev }
+            }
+        }
+
+        syncAndroidView()
+    }
+
+    protected fun isCardComponent(): Boolean =
+        componentClassPrefix == "card" ||
+            nativeWidget.classes.contains("card") ||
+            nativeWidget.classes.any { it.endsWith("-card") }
+
+    protected fun isToastComponent(): Boolean =
+        componentClassPrefix == "toast" || nativeWidget.classes.contains("toast")
+
+    protected open fun resolveDefaultPaddingPx(): EdgeInsets {
+        val raw = nativeWidget.padding
+        if (raw != EdgeInsets.ZERO) {
+            return EdgeInsets(
+                top = AndroidViewHandle.dpToPx(raw.top),
+                right = AndroidViewHandle.dpToPx(raw.right),
+                bottom = AndroidViewHandle.dpToPx(raw.bottom),
+                left = AndroidViewHandle.dpToPx(raw.left)
+            )
+        }
+        if (isCardComponent()) {
+            val p = AndroidViewHandle.dpToPx(12)
+            return EdgeInsets(p, p, p, p)
+        }
+        if (isToastComponent()) {
+            val pxH = AndroidViewHandle.dpToPx(12)
+            val pxV = AndroidViewHandle.dpToPx(8)
+            return EdgeInsets(pxV, pxH, pxV, pxH)
+        }
+        return EdgeInsets.ZERO
+    }
+
+    protected open fun syncAndroidView() {
+        runCatching {
+            val weightAttr = nativeWidget.attributes["data-stack-weight"]
+                ?: nativeWidget.attributes["layoutWeight"]
+            nativeWidget.layoutWeight = weightAttr?.toFloatOrNull()
+                ?: if (nativeWidget.classes.contains("flex-grow-1") || styleSnapshot.flexGrow == BootstrapFlexGrow.GROW_1) 1f else 0f
+
+            nativeWidget.fillMaxWidth =
+                nativeWidget.attributes["layoutWidth"] == "MATCH_PARENT" ||
+                    nativeWidget.classes.contains("w-100") ||
+                    styleSnapshot.width == BootstrapWidth.W_100 ||
+                    styleSnapshot.width == BootstrapWidth.VW_100 ||
+                    styleSnapshot.width == BootstrapWidth.MIN_VW_100
+
+            nativeWidget.fillMaxHeight =
+                nativeWidget.attributes["layoutHeight"] == "MATCH_PARENT" ||
+                    nativeWidget.classes.contains("h-100") ||
+                    styleSnapshot.height == BootstrapHeight.H_100 ||
+                    styleSnapshot.height == BootstrapHeight.VH_100 ||
+                    styleSnapshot.height == BootstrapHeight.MIN_VH_100
+
+            val resolvedFlexDir = styleSnapshot.flexDirection ?: when {
+                nativeWidget.classes.contains("flex-row") || componentClassPrefix == "hstack" -> FlexDirection.ROW
+                else -> FlexDirection.COLUMN
+            }
+            nativeWidget.flexDirection = resolvedFlexDir
+            nativeWidget.flexWrap = styleSnapshot.flexWrap ?: if (nativeWidget.classes.contains("flex-wrap")) FlexWrap.WRAP else FlexWrap.NOWRAP
+            nativeWidget.alignItems = styleSnapshot.alignItems ?: AlignItems.STRETCH
+            nativeWidget.justifyContent = styleSnapshot.justifyContent ?: JustifyContent.START
+
+            val gapScaleDp = spacingScaleToPx(styleSnapshot.gap)
+            val gapDp = explicitGapDp ?: gapScaleDp ?: 0
+            nativeWidget.gapPx = AndroidViewHandle.dpToPx(gapDp)
+
+            AndroidViewHandle.runOnMainThread {
+                runCatching {
+                    val view = nativeWidget.androidView ?: return@runCatching
+
+                    val targetVisibility = when {
+                        !nativeWidget.visible || styleSnapshot.display == DisplayMode.NONE -> View.GONE
+                        styleSnapshot.visibility == BootstrapVisibility.INVISIBLE ||
+                            nativeWidget.attributes["visibility"] == "INVISIBLE" -> View.INVISIBLE
+                        else -> View.VISIBLE
+                    }
+                    if (view.visibility != targetVisibility) {
+                        view.visibility = targetVisibility
+                    }
+                    view.isEnabled = nativeWidget.enabled
+                    view.alpha = nativeWidget.alpha
+
+                    val effPad = resolveDefaultPaddingPx()
+                    val padTarget = nativeWidget.childHostViewGroup ?: view
+                    padTarget.setPadding(effPad.left, effPad.top, effPad.right, effPad.bottom)
+
+                    if (shouldApplyBaseBackgroundDrawable()) {
+                        applyBaseSurfaceDrawable(view)
+                    }
+
+                    if (onClickListener != null) {
+                        view.isClickable = true
+                        view.setOnClickListener { dispatchClick() }
+                    }
+
+                    val parentVg = view.parent
+                    if (parentVg is AndroidFlexContainerView) {
+                        val lp = (view.layoutParams as? AndroidFlexContainerView.LayoutParams)
+                            ?: AndroidFlexContainerView.buildLayoutParamsFor(nativeWidget)
+                        AndroidFlexContainerView.applyHandleToLayoutParams(nativeWidget, lp)
+                        view.layoutParams = lp
+                        parentVg.requestLayout()
+                    }
+                }
+            }
         }
     }
 
-    private fun spacingScaleToPx(scale: SpacingScale?): Int? = when (scale) {
+    protected open fun applyBaseSurfaceDrawable(view: View) {
+        val isDark = AndroidViewHandle.isDarkTheme()
+        val isCard = isCardComponent()
+        val isToast = isToastComponent()
+        val isViewAsBanner = nativeWidget.classes.contains("view-as-banner")
+        val isQueueRow = nativeWidget.classes.contains("queue-row") || nativeWidget.classes.contains("handler-queue-row")
+
+        val bgType = styleSnapshot.backgroundType ?: if (isToast) styleSnapshot.type else null
+        val explicitBg = customStyleBackgroundColor
+            ?: bgType?.takeIf { it != BootstrapType.NONE }?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+
+        val borderTypeColor = styleSnapshot.borderType?.takeIf { it != BootstrapType.NONE }?.let {
+            BootstrapColorPalette.resolveColor(it, isDark)
+        }
+        val explicitBorderColor = customStyleBorderColor ?: borderTypeColor
+
+        val radiusDp = when {
+            customStyleBorderRadiusPx != null -> customStyleBorderRadiusPx!!
+            styleSnapshot.borderRadius != null -> styleSnapshot.borderRadius!!.radiusPx.toFloat()
+            isCard || isToast -> 10f
+            isViewAsBanner || isQueueRow -> 8f
+            else -> 0f
+        }
+
+        val borderWidthDp = when {
+            customStyleBorderWidthPx != null -> customStyleBorderWidthPx!!
+            styleSnapshot.borderWidth != null -> styleSnapshot.borderWidth!!.widthPx.toFloat()
+            isCard || isToast || isViewAsBanner || isQueueRow -> 1f
+            else -> 0f
+        }
+
+        if (explicitBg == null && !isCard && !isToast && !isViewAsBanner && !isQueueRow && borderWidthDp <= 0f && radiusDp <= 0f) {
+            return
+        }
+
+        val fillArgb: Int = when {
+            explicitBg != null -> explicitBg.toArgbInt()
+            isViewAsBanner -> if (isDark) 0xFF3A2E05.toInt() else 0xFFFFF3CD.toInt()
+            isCard -> if (isDark) 0xFF1E222A.toInt() else 0xFFFFFFFF.toInt()
+            isQueueRow -> when {
+                nativeWidget.classes.contains("queue-row-unavailable") ||
+                    nativeWidget.classes.contains("handler-queue-row-trouble") ->
+                    if (isDark) 0xFF3B1A1E.toInt() else 0xFFFDE8E8.toInt()
+                nativeWidget.classes.contains("queue-row-trouble") ->
+                    if (isDark) 0xFF3A2E05.toInt() else 0xFFFFF8E1.toInt()
+                nativeWidget.classes.contains("queue-row-handled") ||
+                    nativeWidget.classes.contains("handler-queue-row-handled") ->
+                    if (isDark) 0xFF142E24.toInt() else 0xFFE8F5E9.toInt()
+                nativeWidget.classes.contains("queue-row-hot") ->
+                    if (isDark) 0xFF331B22.toInt() else 0xFFFFF0F0.toInt()
+                else -> if (isDark) 0xFF252A34.toInt() else 0xFFF8F9FC.toInt()
+            }
+            else -> 0x00000000
+        }
+
+        val strokeArgb: Int = when {
+            explicitBorderColor != null -> explicitBorderColor.toArgbInt()
+            isViewAsBanner -> if (isDark) 0xFF66520E.toInt() else 0xFFFFECB5.toInt()
+            isCard -> if (isDark) 0xFF2E3440.toInt() else 0xFFE0E4EC.toInt()
+            isQueueRow -> if (isDark) 0xFF323846.toInt() else 0xFFE2E8F0.toInt()
+            else -> if (isDark) 0xFF3B4252.toInt() else 0xFFCBD5E1.toInt()
+        }
+
+        val drawable = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fillArgb)
+            if (radiusDp > 0f) {
+                cornerRadius = AndroidViewHandle.dpToPxFloat(radiusDp)
+            }
+            if (borderWidthDp > 0f) {
+                setStroke(AndroidViewHandle.dpToPx(borderWidthDp).coerceAtLeast(1), strokeArgb)
+            }
+        }
+        view.backgroundTintList = null
+        view.background = drawable
+    }
+
+    protected fun spacingScaleToPx(scale: SpacingScale?): Int? = when (scale) {
         SpacingScale.ZERO -> 0
         SpacingScale.ONE -> 4
         SpacingScale.TWO -> 8
@@ -285,19 +521,92 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun applyComponentStyle(style: ComponentStyle) {
-        customStyleBackgroundColor = style.getBackgroundColor()
-        customStyleTextColor = style.getTextColor()
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val filtered = style.copyFilteredForSystemComponent(
+            allowTypography = allowTypography,
+            allowAestheticSkin = allowAesthetic
+        )
+        baseComponentStyle = filtered
 
-        style.getOpacity()?.let { setOpacity(it) }
+        if (allowAesthetic) {
+            customStyleBackgroundColor = filtered.getBackgroundColor() ?: customStyleBackgroundColor
+            customStyleBorderColor = filtered.getBorderColor() ?: customStyleBorderColor
+            filtered.borderWidthPx?.let { customStyleBorderWidthPx = it }
+            filtered.borderRadiusPx?.let { customStyleBorderRadiusPx = it }
+        } else {
+            customStyleBackgroundColor = null
+            customStyleBorderColor = null
+            customStyleBorderWidthPx = null
+            customStyleBorderRadiusPx = null
+            nativeWidget.attributes.remove("backgroundColor")
+            nativeWidget.attributes.remove("backgroundGradient")
+            nativeWidget.attributes.remove("borderColor")
+            nativeWidget.attributes.remove("borderWidthPx")
+            nativeWidget.attributes.remove("borderRadiusPx")
+            nativeWidget.attributes.remove("boxShadowBlurPx")
+            nativeWidget.attributes.remove("boxShadowColor")
+        }
 
-        val wLen = style.getWidth()
-        val hLen = style.getHeight()
+        if (allowTypography) {
+            customStyleTextColor = filtered.getTextColor() ?: customStyleTextColor
+            filtered.fontSizePx?.let { customStyleFontSizePx = it }
+            filtered.fontWeightNumeric?.let { customStyleFontWeightNumeric = it }
+            filtered.getFontFamily()?.resolvedPrimaryName()?.let { nativeWidget.attributes["fontFamily"] = it }
+            filtered.fontSizePx?.let { nativeWidget.attributes["fontSizePx"] = it.toString() }
+            filtered.getFontWeight()?.let { nativeWidget.attributes["fontWeight"] = it.cssClass }
+            filtered.getFontStyle()?.let { nativeWidget.attributes["fontStyle"] = it.cssValue }
+            filtered.getLineHeight()?.let { nativeWidget.attributes["lineHeight"] = it.toCssString() }
+            filtered.getLetterSpacing()?.let { nativeWidget.attributes["letterSpacing"] = it.toCssString() }
+            filtered.getTextAlign()?.let { nativeWidget.attributes["textAlign"] = when (it) {
+                TextAlignment.START -> "left"
+                TextAlignment.CENTER -> "center"
+                TextAlignment.END -> "right"
+                TextAlignment.JUSTIFY -> "justify"
+            } }
+            filtered.getTextDecoration()?.let { nativeWidget.attributes["textDecoration"] = it.cssValue }
+            filtered.getTextTransform()?.let { nativeWidget.attributes["textTransform"] = it.cssClass }
+            filtered.getTextOverflow()?.let { nativeWidget.attributes["textOverflow"] = it.cssClass }
+            filtered.getWhiteSpace()?.let { nativeWidget.attributes["whiteSpace"] = it.cssValue }
+            filtered.getWordBreak()?.let { nativeWidget.attributes["wordBreak"] = it.cssValue }
+            filtered.getTextColor()?.let { nativeWidget.attributes["textColor"] = it.toCssRgbaString() }
+        } else {
+            customStyleTextColor = null
+            customStyleFontSizePx = null
+            customStyleFontWeightNumeric = null
+            nativeWidget.attributes.remove("textColor")
+            nativeWidget.attributes.remove("fontFamily")
+            nativeWidget.attributes.remove("fontSizePx")
+            nativeWidget.attributes.remove("fontWeight")
+            nativeWidget.attributes.remove("fontStyle")
+            nativeWidget.attributes.remove("lineHeight")
+            nativeWidget.attributes.remove("letterSpacing")
+            nativeWidget.attributes.remove("textAlign")
+            nativeWidget.attributes.remove("textDecoration")
+            nativeWidget.attributes.remove("textTransform")
+            nativeWidget.attributes.remove("textOverflow")
+            nativeWidget.attributes.remove("whiteSpace")
+            nativeWidget.attributes.remove("wordBreak")
+        }
+
+        filtered.getOpacity()?.let { setOpacity(it) }
+
+        filtered.getFlexDirection()?.let { styleSnapshot = styleSnapshot.copy(flexDirection = it) }
+        filtered.getFlexWrap()?.let { styleSnapshot = styleSnapshot.copy(flexWrap = it) }
+        filtered.getAlignItems()?.let { styleSnapshot = styleSnapshot.copy(alignItems = it) }
+        filtered.getJustifyContent()?.let { styleSnapshot = styleSnapshot.copy(justifyContent = it) }
+        filtered.getGap()?.resolvePx()?.roundToInt()?.let { explicitGapDp = it }
+
+        val wLen = filtered.getWidth()
+        val hLen = filtered.getHeight()
         if (wLen != null || hLen != null) {
             if (wLen?.unit == CssUnit.PERCENT && wLen.value == 100f) {
                 nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
+                nativeWidget.fillMaxWidth = true
             }
             if (hLen?.unit == CssUnit.PERCENT && hLen.value == 100f) {
                 nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
+                nativeWidget.fillMaxHeight = true
             }
             val wPx = wLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
                 ?: preferredSizeValue?.width
@@ -305,37 +614,47 @@ open class AndroidBaseNativeImpl(
             val hPx = hLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
                 ?: preferredSizeValue?.height
                 ?: nativeWidget.bounds.height
+            if (wLen != null && wLen.unit != CssUnit.PERCENT && wPx > 0) {
+                nativeWidget.hasExplicitPreferredWidth = true
+            }
+            if (hLen != null && hLen.unit != CssUnit.PERCENT && hPx > 0) {
+                nativeWidget.hasExplicitPreferredHeight = true
+            }
             nativeWidget.bounds = Rect(nativeWidget.bounds.x, nativeWidget.bounds.y, wPx, hPx)
         }
 
-        style.getPadding()?.let { setPadding(it.toEdgeInsets()) }
-        style.getMargin()?.let { setMargin(it.toEdgeInsets()) }
+        filtered.getPadding()?.let { setPadding(it.toEdgeInsets()) }
+        filtered.getMargin()?.let { setMargin(it.toEdgeInsets()) }
 
-        when (style.getVisibility()) {
+        when (filtered.getVisibility()) {
             CssVisibility.HIDDEN, CssVisibility.COLLAPSE -> {
                 nativeWidget.attributes["visibility"] = "INVISIBLE"
-                nativeWidget.androidView?.visibility = View.INVISIBLE
+                AndroidViewHandle.runOnMainThread {
+                    runCatching { nativeWidget.androidView?.visibility = View.INVISIBLE }
+                }
             }
             CssVisibility.VISIBLE -> {
                 nativeWidget.attributes["visibility"] = "VISIBLE"
-                if (nativeWidget.visible) nativeWidget.androidView?.visibility = View.VISIBLE
+                if (nativeWidget.visible) {
+                    AndroidViewHandle.runOnMainThread {
+                        runCatching { nativeWidget.androidView?.visibility = View.VISIBLE }
+                    }
+                }
             }
             null -> {}
         }
 
-        if (style.getDisplay() == CssDisplay.NONE) {
+        if (filtered.getDisplay() == CssDisplay.NONE) {
             setVisible(false)
         }
-        val cssProps = style.toCssPropertyMap()
-        cssProps["flex-grow"]?.first?.let { nativeWidget.attributes["layoutWeight"] = it }
+        filtered.getFlexGrow()?.let { nativeWidget.attributes["layoutWeight"] = it.toString() }
             ?: nativeWidget.attributes.remove("layoutWeight")
-        cssProps["flex-shrink"]?.first?.let { nativeWidget.attributes["flexShrink"] = it }
+        filtered.getFlexShrink()?.let { nativeWidget.attributes["flexShrink"] = it.toString() }
             ?: nativeWidget.attributes.remove("flexShrink")
-        cssProps["flex-basis"]?.first?.let { nativeWidget.attributes["flexBasis"] = it }
+        filtered.getFlexBasis()?.let { nativeWidget.attributes["flexBasis"] = it.toCssString() }
             ?: nativeWidget.attributes.remove("flexBasis")
-        cssProps["aspect-ratio"]?.first?.let { nativeWidget.attributes["aspectRatio"] = it }
+        filtered.getAspectRatio()?.let { nativeWidget.attributes["aspectRatio"] = it.toCssString() }
             ?: nativeWidget.attributes.remove("aspectRatio")
-        // Unsupported CSS properties on mobile (such as cursor) are silently ignored.
         syncNativeBootstrapAppearance()
     }
 
@@ -477,14 +796,14 @@ open class AndroidBaseNativeImpl(
 
     override fun setVisible(visible: Boolean) {
         nativeWidget.visible = visible
-        nativeWidget.androidView?.visibility = if (visible) View.VISIBLE else View.GONE
+        syncAndroidView()
     }
 
     override fun isVisible(): Boolean = nativeWidget.visible
 
     override fun setEnabled(enabled: Boolean) {
         nativeWidget.enabled = enabled
-        nativeWidget.androidView?.isEnabled = enabled
+        syncAndroidView()
     }
 
     override fun isEnabled(): Boolean = nativeWidget.enabled
@@ -492,7 +811,9 @@ open class AndroidBaseNativeImpl(
     override fun setOpacity(opacity: Float) {
         val clamped = opacity.coerceIn(0f, 1f)
         nativeWidget.alpha = clamped
-        nativeWidget.androidView?.alpha = clamped
+        AndroidViewHandle.runOnMainThread {
+            runCatching { nativeWidget.androidView?.alpha = clamped }
+        }
     }
 
     override fun getOpacity(): Float = nativeWidget.alpha
@@ -506,28 +827,59 @@ open class AndroidBaseNativeImpl(
     override fun setPreferredSize(size: Size?) {
         preferredSizeValue = size
         if (size != null) {
+            nativeWidget.hasExplicitPreferredWidth = size.width > 0
+            nativeWidget.hasExplicitPreferredHeight = size.height > 0
             nativeWidget.bounds = Rect(nativeWidget.bounds.x, nativeWidget.bounds.y, size.width, size.height)
+        } else {
+            nativeWidget.hasExplicitPreferredWidth = false
+            nativeWidget.hasExplicitPreferredHeight = false
         }
+        syncAndroidView()
     }
 
     override fun getBounds(): Rect = nativeWidget.bounds
 
     override fun setPadding(padding: EdgeInsets) {
         nativeWidget.padding = padding
-        nativeWidget.androidView?.setPadding(padding.left, padding.top, padding.right, padding.bottom)
+        syncAndroidView()
     }
+
+    fun getPadding(): EdgeInsets = nativeWidget.padding
+
+    fun getPaddingScale(): SpacingScale? = styleSnapshot.paddingAll
 
     override fun setMargin(margin: EdgeInsets) {
         nativeWidget.margin = margin
+        syncAndroidView()
+    }
+
+    fun getMargin(): EdgeInsets = nativeWidget.margin
+
+    protected fun resolveEffectiveBorderRadiusPx(defaultDp: Float = 6f): Float {
+        val dp = when {
+            customStyleBorderRadiusPx != null -> customStyleBorderRadiusPx!!
+            styleSnapshot.borderRadius != null -> styleSnapshot.borderRadius!!.radiusPx.toFloat()
+            else -> defaultDp
+        }
+        return AndroidViewHandle.dpToPxFloat(dp)
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
-        customStyleBackgroundColor = style.backgroundColor
-        customStyleTextColor = style.textColor
-        style.backgroundColor?.let {
-            nativeWidget.androidView?.setBackgroundColor(it.toArgbInt())
-        }
-        style.opacity.let { setOpacity(it) }
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val filtered = style.copyFilteredForSystemComponent(
+            allowTypography = allowTypography,
+            allowAestheticSkin = allowAesthetic
+        )
+        baseComputedStyle = filtered
+        customStyleBackgroundColor = if (allowAesthetic) filtered.backgroundColor else null
+        customStyleTextColor = if (allowTypography) filtered.textColor else null
+        customStyleBorderColor = if (allowAesthetic) filtered.borderColor else null
+        customStyleBorderWidthPx = if (allowAesthetic) filtered.borderWidthPx else null
+        customStyleBorderRadiusPx = if (allowAesthetic) filtered.borderRadiusPx else null
+        customStyleFontSizePx = if (allowTypography) filtered.fontSizePx else null
+        customStyleFontWeightNumeric = if (allowTypography) filtered.fontWeightNumeric else null
+        filtered.opacity.let { setOpacity(it) }
         syncNativeBootstrapAppearance()
     }
 
@@ -550,27 +902,31 @@ open class AndroidBaseNativeImpl(
             onComplete()
             return true
         }
-        val anim = view.animate()
-            .setDuration(spec.durationMs.toLong())
-            .setStartDelay(spec.delayMs.toLong())
-            .setInterpolator(
-                PathInterpolator(
-                    spec.timingFunction.x1,
-                    spec.timingFunction.y1,
-                    spec.timingFunction.x2,
-                    spec.timingFunction.y2
+        runCatching {
+            val anim = view.animate()
+                .setDuration(spec.durationMs.toLong())
+                .setStartDelay(spec.delayMs.toLong())
+                .setInterpolator(
+                    PathInterpolator(
+                        spec.timingFunction.x1,
+                        spec.timingFunction.y1,
+                        spec.timingFunction.x2,
+                        spec.timingFunction.y2
+                    )
                 )
-            )
-            .withEndAction { onComplete() }
-        when (property) {
-            "opacity" -> toValue.toFloatOrNull()?.let { anim.alpha(it) }
-            "transform" -> {
-                val tf = CssTransform2D.parse(toValue)
-                val (dx, dy) = tf.resolveTranslationPx(view.width, view.height)
-                anim.translationX(dx).translationY(dy).scaleX(tf.scaleX).scaleY(tf.scaleY).rotation(tf.rotateDeg)
+                .withEndAction { onComplete() }
+            when (property) {
+                "opacity" -> toValue.toFloatOrNull()?.let { anim.alpha(it) }
+                "transform" -> {
+                    val tf = CssTransform2D.parse(toValue)
+                    val (dx, dy) = tf.resolveTranslationPx(view.width, view.height)
+                    anim.translationX(dx).translationY(dy).scaleX(tf.scaleX).scaleY(tf.scaleY).rotation(tf.rotateDeg)
+                }
             }
+            anim.start()
+        }.onFailure {
+            onComplete()
         }
-        anim.start()
         return true
     }
 
@@ -580,11 +936,18 @@ open class AndroidBaseNativeImpl(
         } else {
             nativeWidget.attributes[name] = value
         }
+        syncAndroidView()
     }
 
     override fun setOnClick(listener: (() -> Unit)?) {
         onClickListener = listener
-        nativeWidget.androidView?.setOnClickListener(if (listener != null) View.OnClickListener { listener() } else null)
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                nativeWidget.androidView?.setOnClickListener(
+                    if (listener != null) View.OnClickListener { dispatchClick() } else null
+                )
+            }
+        }
     }
 
     override fun setOnDoubleClick(listener: (() -> Unit)?) { onDoubleClickListener = listener }
@@ -594,19 +957,23 @@ open class AndroidBaseNativeImpl(
         nativeWidget.attributes["longPressContextMenuEnabled"] = (listener != null).toString()
         val view = nativeWidget.androidView
         if (view != null) {
-            view.isLongClickable = listener != null
-            if (listener != null) {
-                view.setOnLongClickListener {
-                    if (!longPressFiredForTouch) {
-                        longPressFiredForTouch = true
-                        nativeWidget.attributes["lastContextMenuEvent"] = "$lastTouchX,$lastTouchY"
-                        listener(PointerEvent(x = lastTouchX, y = lastTouchY, button = 2))
+            AndroidViewHandle.runOnMainThread {
+                runCatching {
+                    view.isLongClickable = listener != null
+                    if (listener != null) {
+                        view.setOnLongClickListener {
+                            if (!longPressFiredForTouch) {
+                                longPressFiredForTouch = true
+                                nativeWidget.attributes["lastContextMenuEvent"] = "$lastTouchX,$lastTouchY"
+                                listener(PointerEvent(x = lastTouchX, y = lastTouchY, button = 2))
+                            }
+                            true
+                        }
+                        ensureTouchListenerAttached(view)
+                    } else {
+                        view.setOnLongClickListener(null)
                     }
-                    true
                 }
-                ensureTouchListenerAttached(view)
-            } else {
-                view.setOnLongClickListener(null)
             }
         }
     }
@@ -647,13 +1014,15 @@ open class AndroidBaseNativeImpl(
     private fun ensureHoverListenerAttached(view: View) {
         if (hoverListenerAttached) return
         hoverListenerAttached = true
-        view.setOnHoverListener { _, event ->
-            val pe = PointerEvent(x = event.x, y = event.y)
-            when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_ENTER -> onPointerEnterListener?.invoke(pe)
-                MotionEvent.ACTION_HOVER_EXIT -> onPointerLeaveListener?.invoke(pe)
+        runCatching {
+            view.setOnHoverListener { _, event ->
+                val pe = PointerEvent(x = event.x, y = event.y)
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_HOVER_ENTER -> onPointerEnterListener?.invoke(pe)
+                    MotionEvent.ACTION_HOVER_EXIT -> onPointerLeaveListener?.invoke(pe)
+                }
+                false
             }
-            false
         }
     }
 
@@ -679,6 +1048,7 @@ open class AndroidBaseNativeImpl(
     }
 
     fun dispatchClick() {
+        if (!nativeWidget.enabled) return
         if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(lastTouchX, lastTouchY, this)) return
         onClickListener?.invoke()
     }
@@ -690,58 +1060,60 @@ open class AndroidBaseNativeImpl(
     private fun ensureTouchListenerAttached(view: View) {
         if (touchListenerAttached) return
         touchListenerAttached = true
-        view.setOnTouchListener { _, event ->
-            val x = event.x
-            val y = event.y
-            lastTouchX = x
-            lastTouchY = y
-            val pointerId = if (event.pointerCount > 0) event.getPointerId(0) else 0
-            val eventTime = event.eventTime
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    touchStartX = x
-                    touchStartY = y
-                    touchDownTimestampMs = eventTime
-                    longPressFiredForTouch = false
-                    if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerDown(x, y, this)) {
-                        return@setOnTouchListener true
+        runCatching {
+            view.setOnTouchListener { _, event ->
+                val x = event.x
+                val y = event.y
+                lastTouchX = x
+                lastTouchY = y
+                val pointerId = if (event.pointerCount > 0) event.getPointerId(0) else 0
+                val eventTime = event.eventTime
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartX = x
+                        touchStartY = y
+                        touchDownTimestampMs = eventTime
+                        longPressFiredForTouch = false
+                        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerDown(x, y, this)) {
+                            return@setOnTouchListener true
+                        }
+                        gestureRecognizer.onPointerDown(pointerId, x, y, eventTime)
+                        onPointerDownListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                     }
-                    gestureRecognizer.onPointerDown(pointerId, x, y, eventTime)
-                    onPointerDownListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    gestureRecognizer.onPointerMove(pointerId, x, y, eventTime)
-                    val dist = hypot(x - touchStartX, y - touchStartY)
-                    if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
-                        (eventTime - touchDownTimestampMs) >= 500L
-                    ) {
-                        longPressFiredForTouch = true
-                        nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
-                        onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                    MotionEvent.ACTION_MOVE -> {
+                        gestureRecognizer.onPointerMove(pointerId, x, y, eventTime)
+                        val dist = hypot(x - touchStartX, y - touchStartY)
+                        if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
+                            (eventTime - touchDownTimestampMs) >= 500L
+                        ) {
+                            longPressFiredForTouch = true
+                            nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+                            onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                        }
+                        onPointerMoveListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                     }
-                    onPointerMoveListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerUp(x, y, this)) {
-                        com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(x, y, this)
-                        return@setOnTouchListener true
+                    MotionEvent.ACTION_UP -> {
+                        if (com.nexustools.genericui.event.PopupMouseCaptureManager.interceptPointerUp(x, y, this)) {
+                            com.nexustools.genericui.event.PopupMouseCaptureManager.interceptClick(x, y, this)
+                            return@setOnTouchListener true
+                        }
+                        val dist = hypot(x - touchStartX, y - touchStartY)
+                        if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
+                            (eventTime - touchDownTimestampMs) >= 500L
+                        ) {
+                            longPressFiredForTouch = true
+                            nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
+                            onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                        }
+                        gestureRecognizer.onPointerUp(pointerId, x, y, eventTime)
+                        onPointerUpListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                     }
-                    val dist = hypot(x - touchStartX, y - touchStartY)
-                    if (!longPressFiredForTouch && dist < gestureRecognizer.touchSlopPx &&
-                        (eventTime - touchDownTimestampMs) >= 500L
-                    ) {
-                        longPressFiredForTouch = true
-                        nativeWidget.attributes["lastContextMenuEvent"] = "$x,$y"
-                        onContextMenuListener?.invoke(PointerEvent(x = x, y = y, button = 2, pointerId = pointerId))
+                    MotionEvent.ACTION_CANCEL -> {
+                        gestureRecognizer.reset()
                     }
-                    gestureRecognizer.onPointerUp(pointerId, x, y, eventTime)
-                    onPointerUpListener?.invoke(PointerEvent(x = x, y = y, button = 0, pointerId = pointerId))
                 }
-                MotionEvent.ACTION_CANCEL -> {
-                    gestureRecognizer.reset()
-                }
+                false
             }
-            false
         }
     }
 

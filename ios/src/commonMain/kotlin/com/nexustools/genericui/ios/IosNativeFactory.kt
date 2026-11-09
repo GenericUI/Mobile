@@ -42,6 +42,7 @@ import com.nexustools.genericui.nativeimpl.shell.*
 import com.nexustools.genericui.nativeimpl.system.*
 import com.nexustools.genericui.nativeimpl.typography.MarkdownViewNativeImpl
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
+import com.nexustools.genericui.threading.UiThreadDispatcherNativeImpl
 
 /**
  * iOS UIKit / CoreGraphics / ImageIO implementation of [NativeFactory].
@@ -140,6 +141,7 @@ class IosNativeFactory : NativeFactory {
     override fun createTreeView(): TreeViewNativeImpl<*> = IosTreeViewImpl()
 
     // System Services
+    override fun createUiThreadDispatcher(): UiThreadDispatcherNativeImpl = IosUiThreadDispatcherNativeImpl()
     override fun createUiTimerScheduler(): UiTimerNativeImpl = IosUiTimerImpl()
     override fun createPermissionManager(): PermissionManagerNativeImpl = IosPermissionManagerImpl()
     override fun createSystemTray(): SystemTrayNativeImpl = IosSystemTrayImpl()

@@ -31,18 +31,20 @@ When `styles { globalStyleSheet = "styles/main.scss" }` is configured in `build.
 
 ---
 
-## Native UIKit Control Rendering (`BootstrapType.NONE` Default) & Semantic `BootstrapType` Tinting
+## Native UIKit Control Rendering (`BootstrapType.NONE`), `ThemeConfig` Control Tinting (`BootstrapType != NONE`), & System Style Restraints
 
-1. **`BootstrapType.NONE` Default & Zero Bootstrap CSS Styling**:
+1. **`BootstrapType.NONE` Default — 100% Unmodified UIKit System Controls**:
    - Native iOS applications **never** use Bootstrap CSS styling.
-   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default) and no inline `ComponentStyle` (`component.getStyle()`) background/border is set, `IosBaseNativeImpl` renders the **authentic UIKit system control** (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UISegmentedControl`) for the active `LIGHT` / `DARK` `UITraitCollection`.
-2. **Semantic `BootstrapType` Tinting**:
-   - When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set on `component.getBootstrap().type`, `IosBaseNativeImpl` emulates `BootstrapType` by **tinting the native `UIView` / `UIControl`** (`backgroundColor`, `tintColor`, `layer.borderColor` via `BootstrapColorPalette.resolveColor(type, darkTheme)`), supporting `outline = true/false`.
-   - `component.getStyle().setAccentColor(color)` (`accent-color`) sets `onTintColor` / `minimumTrackTintColor` / `tintColor` on UIKit controls.
-   - Unsupported CSS properties and CSS transitions are **silently ignored**.
-3. **Strict User CSS Class Isolation**:
+   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default), `IosBaseNativeImpl` renders the **100% unmodified genuine UIKit system control** (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UISegmentedControl`) for the active `LIGHT` / `DARK` `UITraitCollection`.
+2. **`BootstrapType != BootstrapType.NONE` — Native UIKit Control Tinting + Contrasting Text**:
+   - When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `IosBaseNativeImpl` tints the native `UIControl` (`UIButton.Configuration` / `tintColor`) using the active `ThemeConfig` / `BootstrapColorPalette.resolveColor(type, darkTheme)` while preserving native UIKit bevels, borders, and highlighted/disabled states, and renders contrasting text on top (`outline = true/false`).
+3. **System Backend Typography vs. Aesthetic Style Restraints**:
+   - **Text / Typography Elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`)**: Honor typography and text-color properties (`color` / `textColor`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration`, `textTransform`, `textOverflow`, `whiteSpace`, `wordBreak`).
+   - **Buttons, Inputs, Controls, & Standard Containers**: Aesthetic skinning and typography overrides on `ComponentStyle` (`backgroundColor`, `background`, `color`, `accentColor`, `borderColor`, `borderWidth`, `borderStyle`, `borderRadius`, `boxShadow`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`) are **silently ignored**. Standard components can **ONLY** be tinted via `BootstrapType`.
+   - **`StyledContainer` & `StyledButton` (and `:extensions:alien`)**: Honor full `ComponentStyle` aesthetic and typography properties.
+4. **Strict User CSS Class Isolation**:
    - In `IosBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the UIKit layout and rendering engine.
-4. **`IApplication` Theming (`ThemeMode.AUTO`, `DARK`, `LIGHT`)**:
+5. **`IApplication` Theming (`ThemeMode.AUTO`, `DARK`, `LIGHT`, & `ThemeConfig`)**:
    - Defaults to `ThemeMode.AUTO`, reading `UITraitCollection.currentTraitCollection.userInterfaceStyle` (`UIUserInterfaceStyleDark` vs. `UIUserInterfaceStyleLight`), observing `traitCollectionDidChange:`, and updating `UIWindow.overrideUserInterfaceStyle`.
 
 ---

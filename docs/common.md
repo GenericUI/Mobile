@@ -8,9 +8,9 @@
 ## Key Components
 
 - **Widget, Styling, & Container Base (`com.nexustools.genericui.mobile`)**:
-  - `MobileBaseNativeImpl` (`BootstrapType.NONE` default, semantic `BootstrapType` tinting, strict `customClasses` isolation, `ComponentStyle` & `accentColor`, silent ignore of unsupported CSS properties)
+  - `MobileBaseNativeImpl` (`BootstrapType.NONE` default unmodified native controls, `BootstrapType != NONE` native control tinting via `ThemeConfig`, strict `customClasses` isolation, typography styles honored on text elements, aesthetic `ComponentStyle` overrides silently ignored on standard controls/containers and honored on `StyledContainer` / `StyledButton`)
   - `MobileBaseContainerNativeImpl`, `MobileNativeWidget`
-  - `MobileWindowNativeImpl`, `MobileApplicationNativeImpl` (`IApplication.addStyleSheet` / `removeStyleSheet`, `ThemeMode.AUTO` / `DARK` / `LIGHT`)
+  - `MobileWindowNativeImpl`, `MobileApplicationNativeImpl` (`IApplication.addStyleSheet` / `removeStyleSheet`, `ThemeMode.AUTO` / `DARK` / `LIGHT`, `ThemeConfig`)
 - **Virtualized Containers (`com.nexustools.genericui.mobile.container`)**:
   - `MobileLazyViewportEngine`
   - `MobileLazyListNativeImpl`, `MobileLazyGridNativeImpl`, `MobileTreeViewNativeImpl`

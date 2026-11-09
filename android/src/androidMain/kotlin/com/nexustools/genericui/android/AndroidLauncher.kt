@@ -2,8 +2,10 @@ package com.nexustools.genericui.android
 
 import com.nexustools.genericui.component.fragment.FragmentRegistry
 import com.nexustools.genericui.component.fragment.IFragment
+import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.core.GenericUiAppDescriptor
+import com.nexustools.genericui.enums.ui.ThemeMode
 import kotlin.reflect.KClass
 
 /**
@@ -33,6 +35,8 @@ object AndroidLauncher {
             installer.invoke()
         }
 
+        ensureApplicationConfigured(descriptor)
+
         for ((fragmentClass, factory) in descriptor.fragmentRegistrations) {
             @Suppress("UNCHECKED_CAST")
             FragmentRegistry.register(fragmentClass as KClass<IFragment>, factory)
@@ -50,5 +54,25 @@ object AndroidLauncher {
 
         activityRegistrations.invoke()
         AndroidActivityRegistry.installAsPlatformLauncher()
+    }
+
+    internal fun ensureApplicationConfigured(descriptor: GenericUiAppDescriptor) {
+        runCatching {
+            val app = Application.current
+                ?: (descriptor.applicationFactory?.invoke(null) as? Application)
+                ?: Application(
+                    title = descriptor.windowTitle,
+                    initialThemeColor = descriptor.themeColor
+                )
+            val mode = when (descriptor.themeMode.trim().lowercase()) {
+                "dark" -> ThemeMode.DARK
+                "light" -> ThemeMode.LIGHT
+                else -> ThemeMode.AUTO
+            }
+            app.setThemeMode(mode)
+            descriptor.precompiledStyleSheetInstaller?.invoke(app)
+            descriptor.globalStyleSheetResourceId?.let { app.addStyleSheet(it) }
+            descriptor.globalStyleSheetPath?.takeIf { it.isNotBlank() }?.let { app.addStyleSheet(it) }
+        }
     }
 }

@@ -5,11 +5,11 @@
 
 ---
 
-## Styling, `BootstrapType.NONE`, & User Class Isolation in `MobileBaseNativeImpl`
+## Styling, `BootstrapType.NONE`, System Backend Style Restraints, & User Class Isolation in `MobileBaseNativeImpl`
 
-- **`BootstrapType.NONE` Default & Semantic `BootstrapType` Tinting**: When `styleSnapshot.type == BootstrapType.NONE` (the default) and no inline `ComponentStyle` background/border is set, mobile controls render as untinted native Android/iOS system views. When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set, `MobileBaseNativeImpl` resolves the semantic color (`BootstrapColorPalette.resolveColor(type, darkTheme)`) for tinting the native view (supporting `outline = true/false`).
+- **`BootstrapType.NONE` Default & Native Control Tinting (`BootstrapType != NONE`)**: When `styleSnapshot.type == BootstrapType.NONE` (the default), mobile controls render as 100% unmodified native Android/iOS system views. When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `MobileBaseNativeImpl` resolves the semantic color (`ThemeConfig` / `BootstrapColorPalette.resolveColor(type, darkTheme)`) for tinting the native view while preserving native borders/elevation and rendering contrasting text (`outline = true/false`).
+- **System Backend Typography vs. Aesthetic Style Restraints**: Typography styles (`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `color`, `lineHeight`, `letterSpacing`, `textAlign`, etc.) are honored on text elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`). Aesthetic skinning and font overrides on `ComponentStyle` are **silently ignored** on standard controls/containers (which can only be tinted via `BootstrapType`), while `StyledContainer` and `StyledButton` honor full `ComponentStyle` aesthetics.
 - **Strict User CSS Class Isolation**: `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are evaluated directly by the mobile layout and rendering engines.
-- **`ComponentStyle` & Silent Ignore**: `applyComponentStyle(style: ComponentStyle)` applies supported properties (`backgroundColor`, `color`, `accentColor`, `borderColor`, `borderRadius`, `opacity`, `padding`, `margin`, `visibility`, `display`) and silently ignores unsupported CSS properties and transitions.
 
 ---
 

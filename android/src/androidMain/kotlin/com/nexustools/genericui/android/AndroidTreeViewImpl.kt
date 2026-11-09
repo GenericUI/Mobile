@@ -1,11 +1,13 @@
 package com.nexustools.genericui.android
 
+import android.content.Context
+import android.view.View
 import com.nexustools.genericui.component.lazy.TreeNode
 import com.nexustools.genericui.mobile.system.MobileLazyViewportPool
 import com.nexustools.genericui.nativeimpl.lazy.TreeViewNativeImpl
 
 /**
- * Android `androidx.recyclerview.widget.RecyclerView` implementation of [TreeViewNativeImpl]
+ * Android tree view implementation of [TreeViewNativeImpl]
  * that flattens expanded [TreeNode] hierarchies and mounts/unmounts visible rows lazily via [MobileLazyViewportPool].
  */
 class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.RecyclerView", "tree-view"), TreeViewNativeImpl<AndroidViewHandle> {
@@ -35,6 +37,9 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
 
     val mountedRowIndices: Set<Int>
         get() = viewportPool.mountedIndices
+
+    override fun createDefaultAndroidView(context: Context): View =
+        AndroidFlexContainerView(context)
 
     override fun setRootNodes(roots: List<TreeNode<*>>) {
         rootNodes = roots
@@ -102,15 +107,19 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
             itemFactory = { idx ->
                 val entry = flattenedVisibleRows[idx]
                 AndroidTextImpl("div", "tree-view-row").apply {
-                    setText(entry.node.label)
+                    setText("  ".repeat(entry.depth) + entry.node.label)
                     nativeWidget.attributes["data-tree-node-id"] = entry.node.id
                     nativeWidget.attributes["data-tree-depth"] = entry.depth.toString()
                     if (entry.node.id == selectedNodeId) {
                         nativeWidget.classes.add("active")
                     }
+                    setOnClick {
+                        setSelectedNodeId(entry.node.id)
+                    }
                 }
             },
             onMountItem = { _, impl ->
+                (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
                 (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
                     nativeWidget.addChild(handle)
                 }

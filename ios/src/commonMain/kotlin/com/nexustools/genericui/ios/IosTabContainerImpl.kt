@@ -93,6 +93,10 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl("UITabBarController", "ta
         nativeWidget.metadata["tabBarStyle"] = style.name
     }
 
+    override fun setFullWidthTabsNative(fullWidth: Boolean) {
+        nativeWidget.metadata["fullWidthTabs"] = fullWidth.toString()
+    }
+
     override fun setSelectedTabIndex(index: Int, fadeTransition: Boolean) {
         if (index !in tabs.indices) return
         if (tabs[index].second == null && tabImpls.getOrNull(index) != null) {

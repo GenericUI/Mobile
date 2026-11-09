@@ -190,12 +190,12 @@ class IosStyledButtonImpl(
 
     override fun applyComponentStyle(style: ComponentStyle) {
         lastComponentStyle = style
-        super.applyComponentStyle(style)
+        super<IosButtonImpl>.applyComponentStyle(style)
         syncVisualsToIosView()
     }
 
     override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
-        super.applyComponentBootstrap(bootstrap)
+        super<IosButtonImpl>.applyComponentBootstrap(bootstrap)
         syncVisualsToIosView()
     }
 

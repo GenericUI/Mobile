@@ -23,16 +23,17 @@ The `:mobile` module hierarchy provides native mobile UI backends for **Android*
 
 ---
 
-## Native Mobile Control Rendering (`BootstrapType.NONE` Default), Semantic `BootstrapType` Tinting, & CSS Behavior
+## Native Mobile Control Rendering (`BootstrapType.NONE`), Native Control Tinting + `ThemeConfig` (`BootstrapType != NONE`), & System Style Restraints
 
-1. **`BootstrapType.NONE` (`BootstrapType.None`) Default & Zero Bootstrap CSS Styling on Mobile Apps**:
+1. **`BootstrapType.NONE` (`BootstrapType.None`) Default — 100% Unmodified Native Mobile Controls**:
    - Native mobile applications **never** apply Bootstrap CSS styling to native controls.
-   - When `component.getBootstrap().type == BootstrapType.NONE` (the default) and no inline `ComponentStyle` (`component.getStyle()`) background/border is set, `:mobile:android` and `:mobile:ios` render the **authentic OS system control** (`MaterialButton` / `AppCompatEditText` / `SwitchMaterial` on Android; `UIButton` / `UITextField` / `UISwitch` / `UISlider` on iOS) for the active `LIGHT` / `DARK` theme.
-2. **Semantic `BootstrapType` Tinting**:
-   - When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set on `component.getBootstrap().type`, both `:mobile:android` and `:mobile:ios` emulate `BootstrapType` by **tinting the native mobile control** with the semantic color (`BootstrapColorPalette.resolveColor(type, darkTheme)` — red for `DANGER`, blue for `PRIMARY`, green for `SUCCESS`, etc., supporting `outline = true/false`).
-   - Standard CSS `accentColor` (`component.getStyle().setAccentColor(color)` / `accent-color`) sets the active indicator fill on switches, checkboxes, radio buttons, sliders, and progress bars.
-3. **Silent Ignore of Unsupported CSS Properties**:
-   - Unsupported CSS properties and CSS transitions on `:mobile:android` and `:mobile:ios` are **silently ignored** (whereas [`:extensions:alien`](../extensions/docs/alien.md) supports 100% of all CSS properties and transitions).
+   - When `component.getBootstrap().type == BootstrapType.NONE` (the default), `:mobile:android` and `:mobile:ios` render the **100% unmodified genuine OS system control** (`MaterialButton` / `AppCompatEditText` / `SwitchMaterial` restoring `defaultNativeBackground` on Android; `UIButton` / `UITextField` / `UISwitch` / `UISlider` on iOS) for the active `LIGHT` / `DARK` theme.
+2. **`BootstrapType != BootstrapType.NONE` — Native Control Tinting via `ThemeConfig` + Contrasting Text**:
+   - When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `:mobile:android` and `:mobile:ios` tint the native control drawable (`ViewCompat.setBackgroundTintList(view, ColorStateList.valueOf(tintColor))` on Android; `UIButton.Configuration` / `tintColor` on iOS) using the resolved `ThemeConfig` / `BootstrapColorPalette` color while preserving native Material elevation, ripples, borders, and hover/pressed/disabled states, and render contrasting text on top (`outline = true/false`).
+3. **System Backend Typography vs. Aesthetic Style Restraints**:
+   - **Text / Typography Elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`)**: Honor typography and text-color properties (`color` / `textColor`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration`, `textTransform`, `textOverflow`, `whiteSpace`, `wordBreak`, plus `bootstrap.textColorType`, `bootstrap.fontSize`, `bootstrap.fontWeight`, `bootstrap.textAlignment`).
+   - **Buttons, Inputs, Controls, & Standard Containers (`Button`, `IconButton`, `ToggleButton`, `CheckBox`, `RadioButton`, `Switch`, `Select`, `DropdownButton`, `TextField`, `TextArea`, `RangeSlider`, `ProgressBar`, `Spinner`, `TabContainer`, `Tab`, `Container`, `Card`, etc.)**: Aesthetic skinning and typography overrides on `ComponentStyle` (`backgroundColor`, `background`, `color`, `accentColor`, `borderColor`, `borderWidth`, `borderStyle`, `borderRadius`, `boxShadow`, `textShadow`, `filter`, `backdropFilter`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`) are **silently ignored** on mobile backends. Standard components can **ONLY** be tinted via `BootstrapType`.
+   - **`StyledContainer` & `StyledButton` (and [`:extensions:alien`](../extensions/docs/alien.md))**: Honor full `ComponentStyle` aesthetic and typography properties across all backends.
 4. **Strict User CSS Class Isolation**:
    - In `MobileBaseNativeImpl`, `AndroidBaseNativeImpl`, and `IosBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the native Android and iOS layout/rendering engines.
 

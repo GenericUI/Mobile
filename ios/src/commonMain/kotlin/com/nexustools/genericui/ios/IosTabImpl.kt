@@ -1,5 +1,6 @@
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.tabs.TabIconPlacement
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
 
@@ -14,6 +15,14 @@ class IosTabImpl(
     var tabIdVal: String = ""
         private set
     var titleVal: String = ""
+        private set
+    var iconVal: String? = null
+        private set
+    var iconSizePxVal: Int = 20
+        private set
+    var iconPlacementVal: TabIconPlacement = TabIconPlacement.START
+        private set
+    var tintImageToThemeVal: Boolean = true
         private set
     var closableVal: Boolean = initialClosable
         private set
@@ -38,7 +47,23 @@ class IosTabImpl(
     }
 
     override fun setIconNative(icon: String?) {
+        iconVal = icon
         if (icon != null) nativeWidget.metadata["icon"] = icon else nativeWidget.metadata.remove("icon")
+    }
+
+    override fun setIconSizePxNative(sizePx: Int) {
+        iconSizePxVal = sizePx.coerceIn(12, 48)
+        nativeWidget.metadata["iconSizePx"] = iconSizePxVal.toString()
+    }
+
+    override fun setIconPlacementNative(placement: TabIconPlacement) {
+        iconPlacementVal = placement
+        nativeWidget.metadata["iconPlacement"] = placement.name
+    }
+
+    override fun setTintImageToThemeNative(tintToTheme: Boolean) {
+        tintImageToThemeVal = tintToTheme
+        nativeWidget.metadata["tintImageToTheme"] = tintToTheme.toString()
     }
 
     override fun setTooltipNative(tooltip: String?) {

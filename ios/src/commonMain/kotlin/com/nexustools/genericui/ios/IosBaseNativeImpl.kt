@@ -47,6 +47,14 @@ open class IosBaseNativeImpl(
     protected var bootstrapState: ComponentBootstrap? = null
     protected var customStyleBackgroundColor: RgbaColor? = null
     protected var customStyleTextColor: RgbaColor? = null
+    protected var baseComponentStyle: ComponentStyle? = null
+    protected var baseComputedStyle: ComputedStyle? = null
+
+    protected open fun allowsSystemAestheticStyles(): Boolean =
+        this is IosStyledContainerImpl || this is IosStyledButtonImpl
+
+    protected open fun allowsSystemTypographyStyles(): Boolean =
+        allowsSystemAestheticStyles() || this is IosTextImpl || this is IosMarkdownViewImpl
 
     private var tooltipTextValue: String? = null
     private var preferredSizeValue: Size? = null
@@ -113,13 +121,19 @@ open class IosBaseNativeImpl(
         nativeWidget.metadata["enumClasses"] = enumClasses.joinToString(" ")
 
         val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val activeTheme = BootstrapColorPalette.activeThemeConfig
         nativeWidget.metadata["systemThemeMode"] = if (isDark) "dark" else "light"
         val effectiveType = styleSnapshot.type?.takeIf { it != BootstrapType.NONE } ?: styleSnapshot.backgroundType
-        val tintColor = customStyleBackgroundColor ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark)
-        val fgColor = customStyleTextColor
-            ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val tintColor = (if (allowAesthetic) customStyleBackgroundColor else null)
+            ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark, activeTheme)
+        val fgColor = (if (allowTypography) customStyleTextColor else null)
+            ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let {
+                BootstrapColorPalette.resolveColor(it, isDark, activeTheme)
+            }
             ?: styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
-                BootstrapColorPalette.resolveForegroundOn(it)
+                BootstrapColorPalette.resolveForegroundOn(it, isDark, activeTheme)
             }
 
         if (tintColor == null) {
@@ -236,87 +250,136 @@ open class IosBaseNativeImpl(
     }
 
     override fun applyComponentStyle(style: ComponentStyle) {
-        customStyleBackgroundColor = style.backgroundColor
-        customStyleTextColor = style.color
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val filtered = style.copyFilteredForSystemComponent(
+            allowTypography = allowTypography,
+            allowAestheticSkin = allowAesthetic
+        )
+        baseComponentStyle = filtered
+
+        customStyleBackgroundColor = if (allowAesthetic) filtered.backgroundColor else null
+        customStyleTextColor = if (allowTypography) filtered.color else null
 
         syncNativeBootstrapAppearance()
 
-        val radiusPt = cssLengthToFloatPt(style.borderRadius?.topLeft)
-        if (radiusPt != null) {
-            nativeWidget.cornerRadius = radiusPt
-            nativeWidget.metadata["cornerRadiusPt"] = radiusPt.toString()
-        } else if (styleSnapshot.borderRadius == null) {
-            nativeWidget.cornerRadius = 0f
-            nativeWidget.metadata.remove("cornerRadiusPt")
+        if (allowAesthetic) {
+            val radiusPt = cssLengthToFloatPt(filtered.borderRadius?.topLeft)
+            if (radiusPt != null) {
+                nativeWidget.cornerRadius = radiusPt
+                nativeWidget.metadata["cornerRadiusPt"] = radiusPt.toString()
+            } else if (styleSnapshot.borderRadius == null) {
+                nativeWidget.cornerRadius = 0f
+                nativeWidget.metadata.remove("cornerRadiusPt")
+            }
+
+            val borderWidthPt = cssLengthToFloatPt(filtered.borderWidth?.top)
+            if (borderWidthPt != null) {
+                nativeWidget.borderWidth = borderWidthPt
+                nativeWidget.metadata["borderWidthPt"] = borderWidthPt.toString()
+            } else if (styleSnapshot.borderWidth == null) {
+                nativeWidget.borderWidth = 0f
+                nativeWidget.metadata.remove("borderWidthPt")
+            }
+
+            filtered.borderColor?.let {
+                nativeWidget.metadata["borderColor"] = it.toHex()
+            } ?: nativeWidget.metadata.remove("borderColor")
+        } else {
+            if (styleSnapshot.borderRadius == null) {
+                nativeWidget.cornerRadius = 0f
+                nativeWidget.metadata.remove("cornerRadiusPt")
+            }
+            if (styleSnapshot.borderWidth == null) {
+                nativeWidget.borderWidth = 0f
+                nativeWidget.metadata.remove("borderWidthPt")
+            }
+            nativeWidget.metadata.remove("borderColor")
+            nativeWidget.metadata.remove("backgroundColor")
+            nativeWidget.metadata.remove("backgroundGradient")
+            nativeWidget.metadata.remove("boxShadowBlurPx")
+            nativeWidget.metadata.remove("boxShadowColor")
         }
 
-        val borderWidthPt = cssLengthToFloatPt(style.borderWidth?.top)
-        if (borderWidthPt != null) {
-            nativeWidget.borderWidth = borderWidthPt
-            nativeWidget.metadata["borderWidthPt"] = borderWidthPt.toString()
-        } else if (styleSnapshot.borderWidth == null) {
-            nativeWidget.borderWidth = 0f
-            nativeWidget.metadata.remove("borderWidthPt")
+        if (allowTypography) {
+            filtered.getFontFamily()?.resolvedPrimaryName()?.let { nativeWidget.metadata["fontFamily"] = it }
+            filtered.fontSizePx?.let { nativeWidget.metadata["fontSizePx"] = it.toString() }
+            filtered.getFontWeight()?.let { nativeWidget.metadata["fontWeight"] = it.cssClass }
+            filtered.getFontStyle()?.let { nativeWidget.metadata["fontStyle"] = it.cssValue }
+            filtered.getLineHeight()?.let { nativeWidget.metadata["lineHeight"] = it.toCssString() }
+            filtered.getLetterSpacing()?.let { nativeWidget.metadata["letterSpacing"] = it.toCssString() }
+            filtered.getTextAlign()?.let { nativeWidget.metadata["textAlign"] = it.cssClass }
+            filtered.getTextDecoration()?.let { nativeWidget.metadata["textDecoration"] = it.cssValue }
+            filtered.getTextTransform()?.let { nativeWidget.metadata["textTransform"] = it.cssClass }
+            filtered.getTextOverflow()?.let { nativeWidget.metadata["textOverflow"] = it.cssClass }
+            filtered.getWhiteSpace()?.let { nativeWidget.metadata["whiteSpace"] = it.cssValue }
+            filtered.getWordBreak()?.let { nativeWidget.metadata["wordBreak"] = it.cssValue }
+            filtered.getTextColor()?.let { nativeWidget.metadata["textColor"] = it.toCssRgbaString() }
+        } else {
+            nativeWidget.metadata.remove("fontFamily")
+            nativeWidget.metadata.remove("fontSizePx")
+            nativeWidget.metadata.remove("fontWeight")
+            nativeWidget.metadata.remove("fontStyle")
+            nativeWidget.metadata.remove("lineHeight")
+            nativeWidget.metadata.remove("letterSpacing")
+            nativeWidget.metadata.remove("textAlign")
+            nativeWidget.metadata.remove("textDecoration")
+            nativeWidget.metadata.remove("textTransform")
+            nativeWidget.metadata.remove("textOverflow")
+            nativeWidget.metadata.remove("whiteSpace")
+            nativeWidget.metadata.remove("wordBreak")
+            nativeWidget.metadata.remove("textColor")
         }
 
-        style.borderColor?.let {
-            nativeWidget.metadata["borderColor"] = it.toHex()
-        } ?: nativeWidget.metadata.remove("borderColor")
-
-        if (style.opacity != null) {
-            setOpacity(style.opacity!!)
+        if (filtered.opacity != null) {
+            setOpacity(filtered.opacity!!)
         } else if (styleSnapshot.opacity == null) {
             setOpacity(1.0f)
         }
 
-        val wPt = cssLengthToIntPt(style.width)
-        val hPt = cssLengthToIntPt(style.height)
+        val wPt = cssLengthToIntPt(filtered.width)
+        val hPt = cssLengthToIntPt(filtered.height)
         if (wPt != null || hPt != null) {
             val cur = nativeWidget.frame
             nativeWidget.frame = Rect(cur.x, cur.y, wPt ?: cur.width, hPt ?: cur.height)
         }
 
-        val padEdges = style.padding
-        val padTop = cssLengthToIntPt(style.paddingTop ?: padEdges?.top)
-        val padRight = cssLengthToIntPt(style.paddingRight ?: padEdges?.right)
-        val padBottom = cssLengthToIntPt(style.paddingBottom ?: padEdges?.bottom)
-        val padLeft = cssLengthToIntPt(style.paddingLeft ?: padEdges?.left)
+        val padEdges = filtered.padding
+        val padTop = cssLengthToIntPt(filtered.paddingTop ?: padEdges?.top)
+        val padRight = cssLengthToIntPt(filtered.paddingRight ?: padEdges?.right)
+        val padBottom = cssLengthToIntPt(filtered.paddingBottom ?: padEdges?.bottom)
+        val padLeft = cssLengthToIntPt(filtered.paddingLeft ?: padEdges?.left)
         if (padTop != null || padRight != null || padBottom != null || padLeft != null) {
             setPadding(EdgeInsets(padTop ?: 0, padRight ?: 0, padBottom ?: 0, padLeft ?: 0))
         }
 
-        val marEdges = style.margin
-        val marTop = cssLengthToIntPt(style.marginTop ?: marEdges?.top)
-        val marRight = cssLengthToIntPt(style.marginRight ?: marEdges?.right)
-        val marBottom = cssLengthToIntPt(style.marginBottom ?: marEdges?.bottom)
-        val marLeft = cssLengthToIntPt(style.marginLeft ?: marEdges?.left)
+        val marEdges = filtered.margin
+        val marTop = cssLengthToIntPt(filtered.marginTop ?: marEdges?.top)
+        val marRight = cssLengthToIntPt(filtered.marginRight ?: marEdges?.right)
+        val marBottom = cssLengthToIntPt(filtered.marginBottom ?: marEdges?.bottom)
+        val marLeft = cssLengthToIntPt(filtered.marginLeft ?: marEdges?.left)
         if (marTop != null || marRight != null || marBottom != null || marLeft != null) {
             setMargin(EdgeInsets(marTop ?: 0, marRight ?: 0, marBottom ?: 0, marLeft ?: 0))
         }
 
         when {
-            style.display == CssDisplay.NONE ||
-                style.visibility == CssVisibility.HIDDEN ||
-                style.visibility == CssVisibility.COLLAPSE -> {
+            filtered.display == CssDisplay.NONE ||
+                filtered.visibility == CssVisibility.HIDDEN ||
+                filtered.visibility == CssVisibility.COLLAPSE -> {
                 nativeWidget.isHidden = true
             }
-            style.display != null || style.visibility == CssVisibility.VISIBLE -> {
+            filtered.display != null || filtered.visibility == CssVisibility.VISIBLE -> {
                 nativeWidget.isHidden = false
             }
         }
 
-        val cssProps = style.toCssPropertyMap()
-        for ((k, pair) in cssProps) {
-            if (k == "cursor") continue
-            nativeWidget.metadata["style:$k"] = pair.first
-        }
-        cssProps["flex-grow"]?.first?.let { nativeWidget.metadata["layoutWeight"] = it }
+        filtered.getFlexGrow()?.let { nativeWidget.metadata["layoutWeight"] = it.toString() }
             ?: nativeWidget.metadata.remove("layoutWeight")
-        cssProps["flex-shrink"]?.first?.let { nativeWidget.metadata["flexShrink"] = it }
+        filtered.getFlexShrink()?.let { nativeWidget.metadata["flexShrink"] = it.toString() }
             ?: nativeWidget.metadata.remove("flexShrink")
-        cssProps["flex-basis"]?.first?.let { nativeWidget.metadata["flexBasis"] = it }
+        filtered.getFlexBasis()?.let { nativeWidget.metadata["flexBasis"] = it.toCssString() }
             ?: nativeWidget.metadata.remove("flexBasis")
-        cssProps["aspect-ratio"]?.first?.let { nativeWidget.metadata["aspectRatio"] = it }
+        filtered.getAspectRatio()?.let { nativeWidget.metadata["aspectRatio"] = it.toCssString() }
             ?: nativeWidget.metadata.remove("aspectRatio")
     }
 
@@ -504,11 +567,22 @@ open class IosBaseNativeImpl(
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
-        style.backgroundColor?.let { nativeWidget.backgroundColor = it }
-        style.textColor?.let { nativeWidget.tintColor = it }
-        style.borderRadiusPx?.let { nativeWidget.cornerRadius = it }
-        style.borderWidthPx?.let { nativeWidget.borderWidth = it }
-        style.opacity.let { setOpacity(it) }
+        val allowAesthetic = allowsSystemAestheticStyles()
+        val allowTypography = allowsSystemTypographyStyles()
+        val filtered = style.copyFilteredForSystemComponent(
+            allowTypography = allowTypography,
+            allowAestheticSkin = allowAesthetic
+        )
+        baseComputedStyle = filtered
+        if (allowAesthetic) {
+            filtered.backgroundColor?.let { nativeWidget.backgroundColor = it }
+            filtered.borderRadiusPx?.let { nativeWidget.cornerRadius = it }
+            filtered.borderWidthPx?.let { nativeWidget.borderWidth = it }
+        }
+        if (allowTypography) {
+            filtered.textColor?.let { nativeWidget.tintColor = it }
+        }
+        filtered.opacity.let { setOpacity(it) }
     }
 
     override fun supportsNativeTransitions(): Boolean = true

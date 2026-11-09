@@ -1,13 +1,14 @@
 package com.nexustools.genericui.android
 
 import com.nexustools.genericui.core.NativeImpl
+import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.enums.ui.Orientation
 import com.nexustools.genericui.mobile.system.MobileLazyViewportPool
 import com.nexustools.genericui.nativeimpl.lazy.LazyListNativeImpl
 
 /**
- * Android `androidx.recyclerview.widget.RecyclerView` (`LinearLayoutManager`) implementation of [LazyListNativeImpl]
- * backed by [MobileLazyViewportPool] for true lazy loading/unloading (`onBindViewHolder` / `onViewRecycled`).
+ * Android lazy list container implementation of [LazyListNativeImpl]
+ * backed by [MobileLazyViewportPool] for true lazy loading/unloading.
  */
 class AndroidLazyListImpl : AndroidBaseContainerNativeImpl("androidx.recyclerview.widget.RecyclerView", "lazy-list"), LazyListNativeImpl<AndroidViewHandle> {
     val viewportPool: MobileLazyViewportPool = MobileLazyViewportPool()
@@ -28,6 +29,7 @@ class AndroidLazyListImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
 
     override fun setOrientation(orientation: Orientation) {
         this.orientation = orientation
+        setFlexDirection(if (orientation == Orientation.HORIZONTAL) FlexDirection.ROW else FlexDirection.COLUMN)
         recomputeVisibleWindow()
     }
 
@@ -87,6 +89,7 @@ class AndroidLazyListImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
             visibleRange = visibleRange,
             itemFactory = factory,
             onMountItem = { idx, impl ->
+                (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
                 (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
                     handle.attributes["data-lazy-index"] = idx.toString()
                     nativeWidget.addChild(handle)

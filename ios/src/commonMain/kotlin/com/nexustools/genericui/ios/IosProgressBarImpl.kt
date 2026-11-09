@@ -8,6 +8,7 @@ import com.nexustools.genericui.nativeimpl.feedback.ProgressBarNativeImpl
 class IosProgressBarImpl : IosBaseNativeImpl("UIProgressView", "progress"), ProgressBarNativeImpl<IosNativeView> {
     private var progressValue: Float = 0f
     private var indeterminateFlag: Boolean = false
+    private var busyFlag: Boolean = false
 
     override fun setProgress(progress: Float) {
         progressValue = progress.coerceIn(0f, 1f)
@@ -20,6 +21,12 @@ class IosProgressBarImpl : IosBaseNativeImpl("UIProgressView", "progress"), Prog
     }
 
     override fun isIndeterminate(): Boolean = indeterminateFlag
+
+    override fun setBusy(busy: Boolean) {
+        busyFlag = busy
+    }
+
+    override fun isBusy(): Boolean = busyFlag
 
     override fun setLabel(label: String?) {
         nativeWidget.text = label ?: ""

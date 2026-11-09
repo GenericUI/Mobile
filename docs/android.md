@@ -5,22 +5,30 @@
 
 ---
 
-## Native Android Control Rendering (`BootstrapType.NONE` Default) & Semantic `BootstrapType` Tinting
+## Native Android Control Rendering (`BootstrapType.NONE`), `ThemeConfig` Drawable Tinting (`BootstrapType != NONE`), & System Style Restraints
 
-1. **`BootstrapType.NONE` Default & Zero Bootstrap CSS Styling**:
+1. **`BootstrapType.NONE` Default — 100% Unmodified Android / Material System Views**:
    - Native Android applications **never** use Bootstrap CSS styling.
-   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default) and no inline `ComponentStyle` (`component.getStyle()`) background/border is set, `AndroidBaseNativeImpl` renders the **authentic Android / Material system view** (`MaterialButton`, `AppCompatEditText`, `AppCompatCheckBox`, `SwitchMaterial`, `Slider`) for the active `LIGHT` / `DARK` theme.
-2. **Semantic `BootstrapType` Tinting**:
-   - When a semantic `BootstrapType` (`DANGER`, `PRIMARY`, `SUCCESS`, `WARNING`, `INFO`, `SECONDARY`, `LIGHT`, `DARK`, `LINK`) is set on `component.getBootstrap().type`, `AndroidBaseNativeImpl` emulates `BootstrapType` by **tinting the native Android `View`** (`backgroundTintList`, stroke color, and text color via `BootstrapColorPalette.resolveColor(type, darkTheme)`), supporting `outline = true/false`.
-   - `component.getStyle().setAccentColor(color)` (`accent-color`) sets `buttonTintList` / `thumbTintList` / `progressTintList` on interactive Android controls.
-   - Unsupported CSS properties and CSS transitions are **silently ignored**.
-3. **Strict User CSS Class Isolation**:
+   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default), `AndroidBaseNativeImpl` renders the **100% unmodified genuine Android / Material system view** (`MaterialButton`, `AppCompatEditText`, `AppCompatCheckBox`, `SwitchMaterial`, `Slider` with its original `defaultNativeBackground` drawable and `ViewCompat.setBackgroundTintList(view, null)`) for the active `LIGHT` / `DARK` theme.
+2. **`BootstrapType != BootstrapType.NONE` — Native Material Drawable Tinting + Contrasting Text**:
+   - When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `AndroidBaseNativeImpl` tints the native Android `View` drawable (`ViewCompat.setBackgroundTintList(view, ColorStateList.valueOf(tintColor))`) using the active `ThemeConfig` / `BootstrapColorPalette.resolveColor(type, darkTheme)` while preserving native Material elevation, ripples, and pressed/disabled states, and renders contrasting text on top (`outline = true/false`).
+3. **System Backend Typography vs. Aesthetic Style Restraints**:
+   - **Text / Typography Elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`)**: Honor typography and text-color properties (`color` / `textColor`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration`, `textTransform`, `textOverflow`, `whiteSpace`, `wordBreak`).
+   - **Buttons, Inputs, Controls, & Standard Containers**: Aesthetic skinning and typography overrides on `ComponentStyle` (`backgroundColor`, `background`, `color`, `accentColor`, `borderColor`, `borderWidth`, `borderStyle`, `borderRadius`, `boxShadow`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`) are **silently ignored** (never replacing a standard control's native background with a custom `GradientDrawable`). Standard components can **ONLY** be tinted via `BootstrapType`.
+   - **`StyledContainer` & `StyledButton` (and `:extensions:alien`)**: Honor full `ComponentStyle` aesthetic (`GradientDrawable` background/border/radius) and typography properties.
+4. **Strict User CSS Class Isolation**:
    - In `AndroidBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the Android `LayoutParams` and view styling engine.
 
 ---
 
-## Precompiled `.scss` Stylesheets & `IApplication` Theming (`ThemeMode.AUTO`)
+## Precompiled `.scss` Stylesheets, Automatic Android Material XML Generation (`@style/Theme.GenericUI.App`), & `IApplication` Theming (`ThemeMode.AUTO` & `ThemeConfig`)
 
+- **Automatic Android Material Theme XML Generation (`@style/Theme.GenericUI.App`)**:
+  - From the `genericui { theme { ... } }` block in `build.gradle.kts`, `GenericUiGenerateAndroidActivitiesTask` automatically generates:
+    - `res/values/genericui_theme_colors.xml` (`genericui_color_primary`, `genericui_color_secondary`, `genericui_color_accent`, `genericui_color_success`, `genericui_color_danger`, `genericui_color_warning`, `genericui_color_info`, plus light/dark surface/background/text/border colors).
+    - `res/values/themes.xml` (`@style/Theme.GenericUI.App` inheriting `Theme.Material3.DayNight.NoActionBar` or `Theme.Material3.Light.NoActionBar` with `colorPrimary`, `colorSecondary`, `colorTertiary`, `colorError`, `android:colorBackground`, `colorSurface`, `colorOnPrimary`, `colorOnSurface`, `android:statusBarColor`, and `android:navigationBarColor`).
+    - `res/values-night/themes.xml` (`@style/Theme.GenericUI.App` dark palette overrides).
+  - The generated `AndroidManifest.xml` automatically applies `android:theme="@style/Theme.GenericUI.App"` to `<application>`, and `GeneratedAndroidApplication.onCreate()` initializes `app.setThemeConfig(ThemeConfig(...))` at startup.
 - **Build-Time `.scss` Precompilation**: `.scss` files in `src/commonMain/resources/**` generate `ResourceType.STYLE` (`R.style.<name>`) and precompile via `SassKotlinPrecompiler` into `PrecompiledStyleSheet` objects. When `styles { globalStyleSheet = "styles/main.scss" }` is configured in `build.gradle.kts`, `GenericUiGenerateAndroidActivitiesTask` emits `app.addStyleSheet(...)` inside `GeneratedAndroidApplication.onCreate()`.
 - **System Theme Detection (`ThemeMode.AUTO` Default)**:
   - `AndroidApplicationImpl` defaults to `ThemeMode.AUTO`, reading `resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK` (`UiModeManager` / `UI_MODE_NIGHT_YES` vs. `UI_MODE_NIGHT_NO`), listening to `onConfigurationChanged`, and calling `AppCompatDelegate.setDefaultNightMode(MODE_NIGHT_FOLLOW_SYSTEM | MODE_NIGHT_YES | MODE_NIGHT_NO)`.
