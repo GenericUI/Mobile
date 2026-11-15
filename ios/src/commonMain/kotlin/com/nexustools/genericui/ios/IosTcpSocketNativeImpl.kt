@@ -28,6 +28,8 @@ import platform.posix.F_GETFL
 import platform.posix.F_SETFL
 import platform.posix.IPPROTO_TCP
 import platform.posix.O_NONBLOCK
+import platform.posix.POLLIN
+import platform.posix.POLLOUT
 import platform.posix.SOCK_STREAM
 import platform.posix.SOL_SOCKET
 import platform.posix.SO_ERROR
@@ -35,22 +37,18 @@ import platform.posix.addrinfo
 import platform.posix.connect
 import platform.posix.errno
 import platform.posix.fcntl
-import platform.posix.fd_set
 import platform.posix.freeaddrinfo
 import platform.posix.getaddrinfo
 import platform.posix.getsockname
 import platform.posix.getsockopt
 import platform.posix.memcpy
 import platform.posix.memset
-import platform.posix.posix_FD_SET
-import platform.posix.posix_FD_ZERO
-import platform.posix.posix_htons
+import platform.posix.poll
+import platform.posix.pollfd
 import platform.posix.recv
-import platform.posix.select
 import platform.posix.send
 import platform.posix.sockaddr_in
 import platform.posix.socket
-import platform.posix.timeval
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 
@@ -166,14 +164,12 @@ class IosTcpSocketNativeImpl : DefaultTcpSocketNativeImpl() {
                 return -1
             }
 
-            val writeSet = alloc<fd_set>()
-            posix_FD_ZERO(writeSet.ptr)
-            posix_FD_SET(fd, writeSet.ptr)
-            val tv = alloc<timeval>()
-            tv.tv_sec = (timeoutMs / 1000L).convert()
-            tv.tv_usec = ((timeoutMs % 1000L) * 1000L).convert()
+            val pfd = alloc<pollfd>()
+            pfd.fd = fd
+            pfd.events = POLLOUT.convert()
+            pfd.revents = 0
 
-            val sel = select(fd + 1, null, writeSet.ptr, null, tv.ptr)
+            val sel = poll(pfd.ptr, 1u, timeoutMs.coerceIn(1L, 60_000L).toInt())
             if (sel <= 0) {
                 platform.posix.close(fd)
                 return -1
@@ -197,21 +193,20 @@ class IosTcpSocketNativeImpl : DefaultTcpSocketNativeImpl() {
         val actualAddr = alloc<sockaddr_in>()
         val lenVar = alloc<platform.posix.socklen_tVar>().apply { value = sizeOf<sockaddr_in>().convert() }
         if (getsockname(fd, actualAddr.ptr.reinterpret(), lenVar.ptr) == 0) {
-            posix_htons(actualAddr.sin_port.toShort()).toInt() and 0xFFFF
+            val netPort = actualAddr.sin_port.toInt() and 0xFFFF
+            ((netPort and 0xFF) shl 8) or ((netPort ushr 8) and 0xFF)
         } else {
             0
         }
     }
 
     private fun pollInboundOnce(fd: Int, waitMs: Long) = memScoped {
-        val readSet = alloc<fd_set>()
-        posix_FD_ZERO(readSet.ptr)
-        posix_FD_SET(fd, readSet.ptr)
-        val tv = alloc<timeval>()
-        tv.tv_sec = (waitMs / 1000L).convert()
-        tv.tv_usec = ((waitMs % 1000L) * 1000L).convert()
+        val pfd = alloc<pollfd>()
+        pfd.fd = fd
+        pfd.events = POLLIN.convert()
+        pfd.revents = 0
 
-        val ready = select(fd + 1, readSet.ptr, null, null, tv.ptr)
+        val ready = poll(pfd.ptr, 1u, waitMs.coerceIn(0L, 60_000L).toInt())
         if (ready <= 0) return@memScoped
 
         val bufSize = 16384

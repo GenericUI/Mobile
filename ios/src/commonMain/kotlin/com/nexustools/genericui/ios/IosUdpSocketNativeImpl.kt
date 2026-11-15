@@ -34,6 +34,7 @@ import platform.posix.IP_MULTICAST_IF
 import platform.posix.IP_MULTICAST_LOOP
 import platform.posix.IP_MULTICAST_TTL
 import platform.posix.O_NONBLOCK
+import platform.posix.POLLIN
 import platform.posix.SOCK_DGRAM
 import platform.posix.SOL_SOCKET
 import platform.posix.SO_BROADCAST
@@ -41,26 +42,21 @@ import platform.posix.SO_REUSEADDR
 import platform.posix.addrinfo
 import platform.posix.bind
 import platform.posix.fcntl
-import platform.posix.fd_set
 import platform.posix.freeaddrinfo
 import platform.posix.getaddrinfo
 import platform.posix.gethostname
 import platform.posix.getsockname
 import platform.posix.in_addr
-import platform.posix.inet_addr
 import platform.posix.ip_mreq
 import platform.posix.memcpy
 import platform.posix.memset
-import platform.posix.posix_FD_SET
-import platform.posix.posix_FD_ZERO
-import platform.posix.posix_htons
+import platform.posix.poll
+import platform.posix.pollfd
 import platform.posix.recvfrom
-import platform.posix.select
 import platform.posix.sendto
 import platform.posix.setsockopt
 import platform.posix.sockaddr_in
 import platform.posix.socket
-import platform.posix.timeval
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
 
@@ -97,11 +93,11 @@ class IosUdpSocketNativeImpl : DefaultUdpSocketNativeImpl() {
                 memset(addr.ptr, 0, sizeOf<sockaddr_in>().convert())
                 addr.sin_len = sizeOf<sockaddr_in>().toUByte()
                 addr.sin_family = AF_INET.convert()
-                addr.sin_port = posix_htons(localPort.toShort()).toUShort()
+                addr.sin_port = hostToNetworkU16(localPort)
                 val bindIp = if (localHost.isBlank() || localHost == "0.0.0.0") {
                     INADDR_ANY
                 } else {
-                    val parsed = inet_addr(localHost)
+                    val parsed = parseIpv4Addr(localHost)
                     if (parsed == INADDR_NONE) INADDR_ANY else parsed
                 }
                 addr.sin_addr.s_addr = bindIp
@@ -136,12 +132,12 @@ class IosUdpSocketNativeImpl : DefaultUdpSocketNativeImpl() {
 
         runSocketIo {
             memScoped {
-                val groupIp = inet_addr(multicastAddress.trim())
+                val groupIp = parseIpv4Addr(multicastAddress.trim())
                 if (groupIp == INADDR_NONE) return@memScoped
                 val interfaces = LinkedHashSet<UInt>()
                 interfaces.add(INADDR_ANY)
                 interfaces.addAll(discoverLocalIpv4Addresses())
-                val lo = inet_addr("127.0.0.1")
+                val lo = parseIpv4Addr("127.0.0.1")
                 if (lo != INADDR_NONE) interfaces.add(lo)
 
                 for (ifaceIp in interfaces) {
@@ -161,7 +157,7 @@ class IosUdpSocketNativeImpl : DefaultUdpSocketNativeImpl() {
         if (fd >= 0 && !isDisposed) {
             runSocketIo {
                 memScoped {
-                    val groupIp = inet_addr(multicastAddress.trim())
+                    val groupIp = parseIpv4Addr(multicastAddress.trim())
                     if (groupIp != INADDR_NONE) {
                         val interfaces = LinkedHashSet<UInt>()
                         interfaces.add(INADDR_ANY)
@@ -268,14 +264,12 @@ class IosUdpSocketNativeImpl : DefaultUdpSocketNativeImpl() {
     }
 
     private fun pollSocketDatagrams(fd: Int, waitMs: Long) = memScoped {
-        val readSet = alloc<fd_set>()
-        posix_FD_ZERO(readSet.ptr)
-        posix_FD_SET(fd, readSet.ptr)
-        val tv = alloc<timeval>()
-        tv.tv_sec = (waitMs / 1000L).convert()
-        tv.tv_usec = ((waitMs % 1000L) * 1000L).convert()
+        val pfd = alloc<pollfd>()
+        pfd.fd = fd
+        pfd.events = POLLIN.convert()
+        pfd.revents = 0
 
-        val ready = select(fd + 1, readSet.ptr, null, null, tv.ptr)
+        val ready = poll(pfd.ptr, 1u, waitMs.coerceIn(0L, 60_000L).toInt())
         if (ready <= 0) return@memScoped
 
         val cap = 65536
@@ -333,8 +327,28 @@ class IosUdpSocketNativeImpl : DefaultUdpSocketNativeImpl() {
         list.toList()
     }
 
-    private fun networkToHostU16(netPort: UShort): Int =
-        posix_htons(netPort.toShort()).toInt() and 0xFFFF
+    private fun parseIpv4Addr(ip: String): UInt {
+        val parts = ip.trim().split('.')
+        if (parts.size != 4) return INADDR_NONE
+        val b0 = parts[0].toIntOrNull()?.takeIf { it in 0..255 } ?: return INADDR_NONE
+        val b1 = parts[1].toIntOrNull()?.takeIf { it in 0..255 } ?: return INADDR_NONE
+        val b2 = parts[2].toIntOrNull()?.takeIf { it in 0..255 } ?: return INADDR_NONE
+        val b3 = parts[3].toIntOrNull()?.takeIf { it in 0..255 } ?: return INADDR_NONE
+        return b0.toUInt() or
+            (b1.toUInt() shl 8) or
+            (b2.toUInt() shl 16) or
+            (b3.toUInt() shl 24)
+    }
+
+    private fun hostToNetworkU16(port: Int): UShort {
+        val p = port and 0xFFFF
+        return (((p and 0xFF) shl 8) or ((p ushr 8) and 0xFF)).toUShort()
+    }
+
+    private fun networkToHostU16(netPort: UShort): Int {
+        val p = netPort.toInt() and 0xFFFF
+        return ((p and 0xFF) shl 8) or ((p ushr 8) and 0xFF)
+    }
 
     private suspend inline fun <T> runSocketIo(crossinline block: () -> T): T {
         return if (coroutineContext[ContinuationInterceptor] == null) {
