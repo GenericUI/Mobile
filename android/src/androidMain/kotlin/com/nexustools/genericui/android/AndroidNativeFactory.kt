@@ -59,6 +59,12 @@ class AndroidNativeFactory(
     override val backendName: String = "android"
     override val backendTarget: BackendTarget = BackendTarget.Android
     override val layoutFactory: LayoutFactory = MobileLayoutFactory
+    override val displayDensityScale: Float
+        get() = runCatching {
+            AndroidViewHandle.activeContext?.resources?.displayMetrics?.density
+                ?: context?.resources?.displayMetrics?.density
+                ?: android.content.res.Resources.getSystem().displayMetrics.density
+        }.getOrNull()?.takeIf { it > 0f } ?: 1f
 
     override val defaultTitleCapabilities: com.nexustools.genericui.window.TitleCapabilities =
         com.nexustools.genericui.window.TitleCapabilities(

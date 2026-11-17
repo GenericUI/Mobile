@@ -8,6 +8,8 @@ import com.nexustools.genericui.nativeimpl.form.TextInputNativeImpl
 class IosTextInputImpl(
     multiline: Boolean = false
 ) : IosBaseNativeImpl(if (multiline) "UITextView" else "UITextField", "form-control"), TextInputNativeImpl<IosNativeView> {
+    private var labelText: String? = null
+    private var captionLabelView: IosNativeView? = null
     private var onValueChangedListener: ((String) -> Unit)? = null
     private var onSubmitListener: ((String) -> Unit)? = null
 
@@ -22,6 +24,32 @@ class IosTextInputImpl(
     }
 
     override fun getPlaceholder(): String = nativeWidget.placeholder
+
+    override fun setLabel(label: String?) {
+        val normalized = label?.takeIf { it.isNotBlank() }
+        labelText = normalized
+        if (normalized != null) {
+            nativeWidget.metadata["label"] = normalized
+            val caption = captionLabelView ?: IosNativeView("UILabel").also { lbl ->
+                lbl.accessibilityIdentifier = "textinput-caption-label"
+                lbl.metadata["role"] = "top-border-caption"
+                captionLabelView = lbl
+                nativeWidget.addSubview(lbl)
+            }
+            caption.text = normalized
+            caption.isHidden = false
+        } else {
+            nativeWidget.metadata.remove("label")
+            captionLabelView?.let { lbl ->
+                lbl.text = ""
+                lbl.isHidden = true
+                lbl.removeFromSuperview()
+            }
+            captionLabelView = null
+        }
+    }
+
+    override fun getLabel(): String? = labelText
 
     override fun setReadOnly(readOnly: Boolean) {
         nativeWidget.metadata["isEditable"] = (!readOnly).toString()

@@ -16,6 +16,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -24,6 +25,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.navigation.NavigationBarView
 import com.nexustools.genericui.component.fragment.Fragment
 import com.nexustools.genericui.component.fragment.FragmentBundle
+import com.nexustools.genericui.component.fragment.helper.FragmentHostFragment
 import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.component.shell.Window
 import com.nexustools.genericui.core.AbstractComponent
@@ -31,12 +33,14 @@ import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.enums.window.DisplayCutoutMode
+import com.nexustools.genericui.enums.window.SoftInputMode
 import com.nexustools.genericui.mobile.layout.MobileAdaptiveFragmentCoordinator
 import com.nexustools.genericui.mobile.system.MobileLifecycleBridge
 import com.nexustools.genericui.mobile.system.MobilePipController
 import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
 import com.nexustools.genericui.style.color.BootstrapColorPalette
 import com.nexustools.genericui.window.PipConfig
+import com.nexustools.genericui.window.WindowConfiguration
 
 /**
  * `AppCompatActivity` subclass that hosts a GenericUI [Fragment] 1:1 on Android.
@@ -88,14 +92,42 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
     private var suppressBottomNavListener: Boolean = false
     private var lastSyncedBottomNavSignature: String = ""
+    private var initialSoftInputMode: Int = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
+    private var capturedInitialSoftInputMode: Boolean = false
+    private var currentSoftInputAdjustResize: Boolean = false
 
     /**
      * Subclasses override this method to provide the root GenericUI [Fragment] hosted by this Activity.
      */
     abstract fun createFragment(): Fragment
 
+    private fun ensureMaterialAppCompatTheme() {
+        runCatching {
+            val tv = android.util.TypedValue()
+            val hasAppCompat = theme.resolveAttribute(androidx.appcompat.R.attr.colorPrimary, tv, true) &&
+                theme.resolveAttribute(androidx.appcompat.R.attr.windowActionBar, tv, true)
+            val hasMaterial = theme.resolveAttribute(com.google.android.material.R.attr.colorPrimaryVariant, tv, true)
+            if (!hasAppCompat || !hasMaterial) {
+                val isDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                val materialStyle = if (isDark) {
+                    com.google.android.material.R.style.Theme_MaterialComponents_NoActionBar
+                } else {
+                    com.google.android.material.R.style.Theme_MaterialComponents_Light_NoActionBar
+                }
+                val originalThemeResId = packageManager.getActivityInfo(componentName, 0).themeResource
+                    .takeIf { it != 0 } ?: applicationInfo.theme
+                setTheme(materialStyle)
+                if (originalThemeResId != 0 && originalThemeResId != materialStyle) {
+                    theme.applyStyle(originalThemeResId, true)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        ensureMaterialAppCompatTheme()
         super.onCreate(savedInstanceState)
+        ensureInitialSoftInputModeCaptured()
         AndroidViewHandle.activeContext = this
         AndroidPreferenceStoreImpl.applicationContext = applicationContext
         AndroidFileBrowserDialogImpl.activeHostActivity = this
@@ -117,8 +149,14 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         val inactiveNavArgb = if (isDark) 0xFF8892A6.toInt() else 0xFF6C757D.toInt()
 
         runCatching {
-            window?.statusBarColor = chromeBgArgb
-            window?.navigationBarColor = chromeBgArgb
+            val win = window
+            if (win != null) {
+                win.statusBarColor = chromeBgArgb
+                win.navigationBarColor = chromeBgArgb
+                val ic = WindowCompat.getInsetsController(win, win.decorView)
+                ic.isAppearanceLightStatusBars = !isDark
+                ic.isAppearanceLightNavigationBars = !isDark
+            }
         }
 
         val root = LinearLayout(this).apply {
@@ -161,6 +199,27 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         root.addView(content)
         root.addView(bottomNav)
         setContentView(root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+            if (hostedFragment?.isFullscreen() == true) {
+                view.setPadding(0, 0, 0, 0)
+            } else {
+                val sysBars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+                )
+                val imeBottom = if (currentSoftInputAdjustResize) {
+                    windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                } else {
+                    0
+                }
+                view.setPadding(
+                    sysBars.left,
+                    sysBars.top,
+                    sysBars.right,
+                    maxOf(sysBars.bottom, imeBottom)
+                )
+            }
+            windowInsets
+        }
 
         rootLayout = root
         toolbarView = toolbar
@@ -174,6 +233,65 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         attachHostedFragment(fragment, launchArgs, restoredBundle)
     }
 
+    private fun ensureInitialSoftInputModeCaptured() {
+        if (!capturedInitialSoftInputMode) {
+            runCatching {
+                window?.attributes?.softInputMode?.let { mode ->
+                    initialSoftInputMode = mode
+                    capturedInitialSoftInputMode = true
+                }
+            }
+        }
+    }
+
+    private fun resolveEffectiveSoftInputMode(fragment: Fragment): SoftInputMode {
+        if (fragment is FragmentHostFragment) {
+            val childMode = fragment.currentFragment?.softInputMode
+            if (childMode != null && childMode != SoftInputMode.UNSPECIFIED) {
+                return childMode
+            }
+        }
+        return fragment.softInputMode
+    }
+
+    fun applySoftInputMode(mode: SoftInputMode) {
+        ensureInitialSoftInputModeCaptured()
+        val androidMode = when (mode) {
+            SoftInputMode.ADJUST_RESIZE -> {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            }
+            SoftInputMode.ADJUST_PAN -> WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+            SoftInputMode.ADJUST_NOTHING -> WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            SoftInputMode.UNSPECIFIED -> initialSoftInputMode
+        }
+        @Suppress("DEPRECATION")
+        currentSoftInputAdjustResize =
+            (androidMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST) == WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        runCatching {
+            window?.setSoftInputMode(androidMode)
+            rootLayout?.let { ViewCompat.requestApplyInsets(it) }
+        }
+    }
+
+    private fun buildWindowConfiguration(config: Configuration = resources.configuration): WindowConfiguration {
+        val metrics = resources.displayMetrics
+        val density = metrics.density.takeIf { it > 0f } ?: 1f
+        val isNight = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val evaluated = adaptiveCoordinator.evaluateConfiguration(
+            widthPx = metrics.widthPixels,
+            heightPx = metrics.heightPixels,
+            densityScale = density,
+            themeMode = if (isNight) ThemeMode.DARK else ThemeMode.LIGHT
+        )
+        val swDp = config.smallestScreenWidthDp.takeIf { it > 0 } ?: evaluated.smallestScreenWidthDp
+        return if (swDp != evaluated.smallestScreenWidthDp) {
+            evaluated.copy(smallestScreenWidthDp = swDp)
+        } else {
+            evaluated
+        }
+    }
+
     /**
      * Binds [fragment] to [activityWindow], sets [Fragment.arguments] from [launchArgs], dispatches
      * [MobileLifecycleBridge.attachFragment] with the merged [FragmentBundle], and synchronizes chrome.
@@ -183,12 +301,20 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         launchArgs: FragmentBundle? = null,
         savedState: FragmentBundle? = null
     ): Fragment {
+        hostedFragment?.let { prev ->
+            prev.onSoftInputModeChanged = null
+            if (prev is FragmentHostFragment) {
+                prev.hostSystem.onActiveFragmentSoftInputModeChanged = null
+            }
+        }
         hostedFragment = fragment
         AndroidActivityRegistry.activeDescriptor?.let { desc ->
             AndroidLauncher.ensureApplicationConfigured(desc)
         }
-        Application.current?.let { app ->
-            fragment.application = app
+        if (fragment.application == null) {
+            Application.current?.let { app ->
+                fragment.application = app
+            }
         }
         val resolvedLaunchArgs = launchArgs ?: fragment.arguments
         if (resolvedLaunchArgs != null) {
@@ -208,7 +334,28 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
             else -> savedState
         }
 
+        fragment.onSoftInputModeChanged = {
+            if (hostedFragment === fragment) {
+                AndroidViewHandle.runOnMainThread {
+                    applySoftInputMode(fragment.softInputMode)
+                }
+            }
+        }
+        if (fragment is FragmentHostFragment) {
+            fragment.hostSystem.onActiveFragmentSoftInputModeChanged = { mode ->
+                if (hostedFragment === fragment) {
+                    AndroidViewHandle.runOnMainThread {
+                        applySoftInputMode(mode)
+                    }
+                }
+            }
+        }
+
         lifecycleBridge.attachFragment(fragment, effectiveBundle)
+        applySoftInputMode(resolveEffectiveSoftInputMode(fragment))
+        runCatching {
+            fragment.onConfigurationChanged(buildWindowConfiguration())
+        }
         runCatching {
             val app = Application.current
             if (app != null) {
@@ -252,7 +399,10 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         AndroidViewHandle.activeContext = this
         AndroidFileBrowserDialogImpl.activeHostActivity = this
         lifecycleBridge.dispatchResume()
-        hostedFragment?.let { syncFragmentChrome(it) }
+        hostedFragment?.let { frag ->
+            applySoftInputMode(resolveEffectiveSoftInputMode(frag))
+            syncFragmentChrome(frag)
+        }
     }
 
     override fun onPause() {
@@ -276,6 +426,12 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         if (AndroidFileBrowserDialogImpl.activeHostActivity === this) {
             AndroidFileBrowserDialogImpl.activeHostActivity = null
         }
+        hostedFragment?.let { prev ->
+            prev.onSoftInputModeChanged = null
+            if (prev is FragmentHostFragment) {
+                prev.hostSystem.onActiveFragmentSoftInputModeChanged = null
+            }
+        }
         lifecycleBridge.dispatchDestroy()
         hostedFragment = null
         super.onDestroy()
@@ -295,14 +451,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val metrics = resources.displayMetrics
-        val isNight = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        val winConfig = adaptiveCoordinator.evaluateConfiguration(
-            widthPx = metrics.widthPixels,
-            heightPx = metrics.heightPixels,
-            densityScale = metrics.density,
-            themeMode = if (isNight) ThemeMode.DARK else ThemeMode.LIGHT
-        )
+        val winConfig = buildWindowConfiguration(newConfig)
         lifecycleBridge.dispatchConfigurationChanged(winConfig)
         hostedFragment?.let { syncFragmentChrome(it) }
     }
@@ -395,6 +544,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
                 } else {
                     insetsController.show(WindowInsetsCompat.Type.systemBars())
                 }
+                rootLayout?.let { ViewCompat.requestApplyInsets(it) }
             }
         }
 

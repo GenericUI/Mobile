@@ -1,6 +1,7 @@
 package com.nexustools.genericui.android
 
 import com.nexustools.genericui.core.GenericUI
+import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.FontWeight
 import com.nexustools.genericui.enums.bootstrap.TextAlignment
@@ -139,5 +140,51 @@ class AndroidSystemThemeAndControlTintTest {
         assertEquals(160, grid.getMinColumnWidthPx())
         assertEquals(2, grid.resolveEffectiveColumns(availableWidthPx = 350))
         assertEquals(4, grid.resolveEffectiveColumns(availableWidthPx = 700))
+    }
+
+    @Test
+    fun pillOutlinedButtonRendersRoundedCornersAndTextInputStoresLabel() {
+        val factory = AndroidNativeFactory()
+        assertTrue(factory.displayDensityScale > 0f)
+
+        val customPrimary = RgbaColor(200, 40, 90, 255)
+        val app = AndroidApplicationImpl()
+        app.setThemeConfig(
+            ThemeConfig(
+                lightColors = ThemeColorSet(primary = customPrimary),
+                darkColors = ThemeColorSet(primary = customPrimary)
+            )
+        )
+
+        val pillOutlineBtn = AndroidButtonImpl()
+        pillOutlineBtn.setText("Music")
+        pillOutlineBtn.setType(BootstrapType.PRIMARY)
+        pillOutlineBtn.setOutline(true)
+        pillOutlineBtn.setBorderRadius(BorderRadiusStyle.PILL)
+
+        val pixels = pillOutlineBtn.renderOffscreenButtonPixels(width = 80, height = 32)
+        assertEquals(80 * 32, pixels.size)
+
+        val cornerAlpha = (pixels[0] ushr 24) and 0xFF
+        assertEquals(0, cornerAlpha, "Pill button outer corner pixel must remain transparent")
+
+        val topEdgeArgb = pixels[40]
+        val topEdgeAlpha = (topEdgeArgb ushr 24) and 0xFF
+        val topEdgeR = (topEdgeArgb ushr 16) and 0xFF
+        val topEdgeB = topEdgeArgb and 0xFF
+        assertTrue(topEdgeAlpha >= 220, "Pill outline top border pixel should be opaque (alpha=$topEdgeAlpha)")
+        assertTrue(topEdgeR > 130 && topEdgeB > 35, "Pill outline border pixel should carry primary tint (r=$topEdgeR, b=$topEdgeB)")
+
+        val centerAlpha = (pixels[16 * 80 + 40] ushr 24) and 0xFF
+        assertTrue(centerAlpha in 1..30, "Pill outline interior pixel should remain low-alpha tinted (alpha=$centerAlpha)")
+
+        val input = AndroidTextInputImpl()
+        assertNull(input.getLabel())
+        input.setLabel("Server Address")
+        assertEquals("Server Address", input.getLabel())
+        assertEquals("Server Address", input.nativeWidget.attributes["label"])
+        input.setLabel("   ")
+        assertNull(input.getLabel())
+        assertNull(input.nativeWidget.attributes["label"])
     }
 }

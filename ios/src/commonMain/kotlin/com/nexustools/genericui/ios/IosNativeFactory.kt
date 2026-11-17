@@ -55,6 +55,10 @@ class IosNativeFactory : NativeFactory {
     override val backendName: String = "ios"
     override val backendTarget: BackendTarget = BackendTarget.IOS
     override val layoutFactory: LayoutFactory = MobileLayoutFactory
+    override val displayDensityScale: Float
+        get() = runCatching {
+            platform.UIKit.UIScreen.mainScreen.scale.toFloat()
+        }.getOrNull()?.takeIf { it > 0f } ?: 1f
 
     override val defaultTitleCapabilities: com.nexustools.genericui.window.TitleCapabilities =
         com.nexustools.genericui.window.TitleCapabilities(

@@ -19,6 +19,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -142,5 +143,26 @@ class IosSystemThemeAndControlTintTest {
         assertEquals(150, grid.getMinColumnWidthPx())
         assertEquals(2, grid.resolveEffectiveColumns(availableWidthPx = 350))
         assertEquals(4, grid.resolveEffectiveColumns(availableWidthPx = 700))
+    }
+
+    @Test
+    fun textInputSupportsLabelAndFactoryProvidesDensityScale() {
+        val factory = IosNativeFactory()
+        assertTrue(factory.displayDensityScale > 0f)
+
+        val input = IosTextInputImpl()
+        assertNull(input.getLabel())
+        input.setLabel("Server Address")
+        assertEquals("Server Address", input.getLabel())
+        assertEquals("Server Address", input.nativeWidget.metadata["label"])
+        val captionView = input.nativeWidget.subviews.firstOrNull { it.accessibilityIdentifier == "textinput-caption-label" }
+        assertNotNull(captionView)
+        assertEquals("Server Address", captionView.text)
+        assertFalse(captionView.isHidden)
+
+        input.setLabel(null)
+        assertNull(input.getLabel())
+        assertNull(input.nativeWidget.metadata["label"])
+        assertTrue(input.nativeWidget.subviews.none { it.accessibilityIdentifier == "textinput-caption-label" })
     }
 }

@@ -3,12 +3,12 @@ package com.nexustools.genericui.android
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.TextView
+import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
 import com.nexustools.genericui.enums.bootstrap.BootstrapSize
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
@@ -31,12 +31,14 @@ open class AndroidButtonImpl(
     private var iconName: String? = null
     private var defaultNativeBackground: Drawable? = null
     private var capturedDefaultBackground: Boolean = false
+    private var layoutListenerAttached: Boolean = false
+    private var lastRenderedBgWidth: Int = -1
+    private var lastRenderedBgHeight: Int = -1
+
+    internal fun getDefaultNativeBackgroundDrawable(): Drawable? = defaultNativeBackground
 
     override fun createDefaultAndroidView(context: Context): View =
-        AndroidControlTintRenderUtil.createNativeOrTintedButton(context) { this }.also { btn ->
-            defaultNativeBackground = btn.background?.constantState?.newDrawable(context.resources) ?: btn.background
-            capturedDefaultBackground = true
-        }
+        AndroidControlTintRenderUtil.createNativeOrTintedButton(context) { this }
 
     override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
 
@@ -73,6 +75,8 @@ open class AndroidButtonImpl(
     ): IntArray {
         val isDark = AndroidViewHandle.isDarkTheme()
         val type = getType() ?: BootstrapType.NONE
+        val tv = nativeWidget.androidView as? TextView
+        val density = tv?.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: AndroidViewHandle.density()
         return AndroidControlTintRenderUtil.renderEmptyTextTintedButtonPixels(
             width = width,
             height = height,
@@ -80,7 +84,9 @@ open class AndroidButtonImpl(
             darkMode = isDark,
             outline = isOutline(),
             themeConfig = BootstrapColorPalette.activeThemeConfig,
-            button = nativeWidget.androidView as? TextView
+            button = tv,
+            borderRadiusStyle = getBorderRadius(),
+            density = density
         )
     }
 
@@ -94,15 +100,54 @@ open class AndroidButtonImpl(
     ): Bitmap? {
         val isDark = AndroidViewHandle.isDarkTheme()
         val type = getType() ?: BootstrapType.NONE
+        val tv = nativeWidget.androidView as? TextView
+        val density = tv?.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: AndroidViewHandle.density()
         return AndroidControlTintRenderUtil.renderEmptyTextTintedBitmap(
-            button = nativeWidget.androidView as? TextView,
+            button = tv,
             width = width,
             height = height,
             type = type,
             darkMode = isDark,
             outline = isOutline(),
-            themeConfig = BootstrapColorPalette.activeThemeConfig
+            themeConfig = BootstrapColorPalette.activeThemeConfig,
+            borderRadiusStyle = getBorderRadius(),
+            density = density
         )
+    }
+
+    private fun refreshTintedBackgroundForSize(tv: TextView, w: Int, h: Int) {
+        if (this is AndroidStyledButtonImpl) return
+        val type = getType() ?: BootstrapType.NONE
+        val borderRadius = getBorderRadius()
+        if (type == BootstrapType.NONE && (borderRadius == null || borderRadius == BorderRadiusStyle.NONE)) {
+            lastRenderedBgWidth = -1
+            lastRenderedBgHeight = -1
+            return
+        }
+        val isDark = AndroidViewHandle.isDarkTheme()
+        val activeTheme = BootstrapColorPalette.activeThemeConfig
+        val outline = isOutline()
+        val density = tv.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: AndroidViewHandle.density()
+        if (defaultNativeBackground != null) {
+            tv.background = defaultNativeBackground?.constantState?.newDrawable(tv.resources) ?: defaultNativeBackground
+        }
+        val tintedBmp = AndroidControlTintRenderUtil.renderEmptyTextTintedBitmap(
+            button = tv,
+            width = w,
+            height = h,
+            type = type,
+            darkMode = isDark,
+            outline = outline,
+            themeConfig = activeTheme,
+            borderRadiusStyle = borderRadius,
+            density = density
+        )
+        if (tintedBmp != null) {
+            tv.backgroundTintList = null
+            tv.background = AndroidTintedButtonDrawable(tv.resources, tintedBmp)
+            lastRenderedBgWidth = w
+            lastRenderedBgHeight = h
+        }
     }
 
     override fun setText(text: String) {
@@ -131,8 +176,25 @@ open class AndroidButtonImpl(
             runCatching {
                 val tv = nativeWidget.androidView as? TextView ?: return@runCatching
                 if (!capturedDefaultBackground) {
-                    defaultNativeBackground = tv.background
-                    capturedDefaultBackground = true
+                    val curBg = tv.background
+                    if (curBg !is AndroidTintedButtonDrawable) {
+                        defaultNativeBackground = curBg?.constantState?.newDrawable(tv.resources) ?: curBg
+                        capturedDefaultBackground = true
+                    }
+                }
+                if (!layoutListenerAttached) {
+                    layoutListenerAttached = true
+                    tv.addOnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                        val newW = right - left
+                        val newH = bottom - top
+                        val oldW = oldRight - oldLeft
+                        val oldH = oldBottom - oldTop
+                        if (newW > 0 && newH > 0 && (newW != oldW || newH != oldH || newW != lastRenderedBgWidth || newH != lastRenderedBgHeight)) {
+                            (v as? TextView)?.let { btnView ->
+                                refreshTintedBackgroundForSize(btnView, newW, newH)
+                            }
+                        }
+                    }
                 }
                 tv.isAllCaps = false
                 tv.gravity = Gravity.CENTER
@@ -174,32 +236,24 @@ open class AndroidButtonImpl(
                     themeConfig = activeTheme
                 )
                 val fgArgb = fgColor.toArgbInt()
+                val borderRadius = getBorderRadius()
 
-                if (type == BootstrapType.NONE) {
+                if (type == BootstrapType.NONE && (borderRadius == null || borderRadius == BorderRadiusStyle.NONE)) {
                     tv.backgroundTintList = null
+                    lastRenderedBgWidth = -1
+                    lastRenderedBgHeight = -1
                     if (defaultNativeBackground != null && tv.background !== defaultNativeBackground) {
                         tv.background = defaultNativeBackground?.constantState?.newDrawable(tv.resources) ?: defaultNativeBackground
                     }
                     tv.setTextColor(fgArgb)
                 } else {
-                    if (defaultNativeBackground != null) {
-                        tv.background = defaultNativeBackground?.constantState?.newDrawable(tv.resources) ?: defaultNativeBackground
-                    }
-                    val w = tv.width.takeIf { it > 0 } ?: nativeWidget.bounds.width.takeIf { it > 0 } ?: AndroidViewHandle.dpToPx(120)
-                    val h = tv.height.takeIf { it > 0 } ?: nativeWidget.bounds.height.takeIf { it > 0 } ?: minHPx.coerceAtLeast(36)
-                    val tintedBmp = AndroidControlTintRenderUtil.renderEmptyTextTintedBitmap(
-                        button = tv,
-                        width = w,
-                        height = h,
-                        type = type,
-                        darkMode = isDark,
-                        outline = outline,
-                        themeConfig = activeTheme
-                    )
-                    if (tintedBmp != null) {
-                        tv.backgroundTintList = null
-                        tv.background = BitmapDrawable(tv.resources, tintedBmp)
-                    }
+                    val w = tv.width.takeIf { it > 0 }
+                        ?: preferredSizeValue?.width?.takeIf { it > 0 }?.let { AndroidViewHandle.dpToPx(it) }
+                        ?: AndroidViewHandle.dpToPx(120)
+                    val h = tv.height.takeIf { it > 0 }
+                        ?: preferredSizeValue?.height?.takeIf { it > 0 }?.let { AndroidViewHandle.dpToPx(it) }
+                        ?: minHPx.coerceAtLeast(36)
+                    refreshTintedBackgroundForSize(tv, w, h)
                     tv.setTextColor(fgArgb)
                 }
 

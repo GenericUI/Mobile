@@ -1,6 +1,7 @@
 package com.nexustools.genericui.android
 
 import android.os.Looper
+import android.util.Log
 import com.nexustools.genericui.nativeimpl.net.DefaultHttpClientNativeImpl
 import com.nexustools.genericui.net.http.HttpRequest
 import com.nexustools.genericui.net.http.HttpResponse
@@ -81,10 +82,15 @@ class AndroidHttpClientNativeImpl(
                     runCatching { conn.disconnect() }
                 }
             } catch (e: Throwable) {
-                if (request.headers.containsKey("X-Episode-Caster-Client-Id") || request.url.contains("/v1/")) {
+                val reason = "${e::class.simpleName ?: "NetworkError"}: ${e.message ?: "Connection failed"}"
+                runCatching {
+                    Log.w("GenericUIHttp", "HTTP ${request.method} ${request.url} failed: $reason")
+                }
+                val hasAndroidLooper = runCatching { Looper.getMainLooper() != null }.getOrDefault(false)
+                if (hasAndroidLooper || request.url.contains("/v1/")) {
                     AndroidHttpResponseNativeImpl(
                         statusCode = 0,
-                        statusText = e.message ?: "Connection failed",
+                        statusText = reason,
                         headers = emptyMap(),
                         initialBodyBytes = ByteArray(0),
                         url = request.url,
