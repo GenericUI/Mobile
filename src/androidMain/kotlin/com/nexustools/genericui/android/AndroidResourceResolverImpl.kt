@@ -30,7 +30,17 @@ class AndroidResourceResolverImpl(
 
     private fun lookupAndroidResId(ctx: Context, resId: ResourceID): Int = runCatching {
         val pkg = ctx.packageName ?: return 0
-        ctx.resources.getIdentifier(resId.name, resId.type.directoryName, pkg)
+        val defType = resId.type.directoryName
+        val candidateNames = linkedSetOf(resId.flatName, resId.name).filter { it.isNotBlank() }
+        for (entryName in candidateNames) {
+            val found = ctx.resources.getIdentifier(entryName, defType, pkg)
+            if (found != 0) return found
+            if (defType == "drawable") {
+                val mipmap = ctx.resources.getIdentifier(entryName, "mipmap", pkg)
+                if (mipmap != 0) return mipmap
+            }
+        }
+        0
     }.getOrDefault(0)
 
     private fun openAssetStream(ctx: Context, resId: ResourceID) = candidateClasspathPaths(resId)

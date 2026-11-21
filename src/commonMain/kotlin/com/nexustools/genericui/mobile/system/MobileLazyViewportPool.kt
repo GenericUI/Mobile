@@ -27,7 +27,7 @@ class MobileLazyViewportPool(
         private set
 
     val mountedIndices: Set<Int>
-        get() = activeMountedItems.keys.toSet()
+        get() = activeMountedItems.keys.toList().toSet()
 
     val mountedCount: Int
         get() = activeMountedItems.size
@@ -68,7 +68,7 @@ class MobileLazyViewportPool(
         onMountItem: (index: Int, impl: NativeImpl<*>) -> Unit,
         onUnmountItem: (index: Int, impl: NativeImpl<*>) -> Unit
     ) {
-        val toRemove = activeMountedItems.keys.filter { it !in visibleRange }
+        val toRemove = activeMountedItems.keys.toList().filter { it !in visibleRange }
         for (idx in toRemove) {
             val removed = activeMountedItems.remove(idx) ?: continue
             onUnmountItem(idx, removed)
@@ -119,15 +119,20 @@ class MobileLazyViewportPool(
     }
 
     fun clearAll(onUnmountItem: ((Int, NativeImpl<*>) -> Unit)? = null) {
-        for ((idx, impl) in activeMountedItems) {
-            onUnmountItem?.invoke(idx, impl)
-            impl.dispose()
-        }
+        val mountedSnapshot = activeMountedItems.entries.map { it.key to it.value }
         activeMountedItems.clear()
+        val scrapSnapshot = ArrayList<NativeImpl<*>>(scrapPool.size)
         while (scrapPool.isNotEmpty()) {
-            scrapPool.removeFirst().dispose()
+            scrapSnapshot.add(scrapPool.removeFirst())
         }
         firstVisibleIndex = 0
         lastVisibleIndex = -1
+        for ((idx, impl) in mountedSnapshot) {
+            onUnmountItem?.invoke(idx, impl)
+            impl.dispose()
+        }
+        for (scrapped in scrapSnapshot) {
+            scrapped.dispose()
+        }
     }
 }

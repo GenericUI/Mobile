@@ -13,11 +13,9 @@ import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.mobile.layout.MobileSafeAreaTracker
-import com.nexustools.genericui.mobile.system.MobilePipController
 import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.WindowNativeImpl
 import com.nexustools.genericui.style.theme.SystemThemeDetector
-import com.nexustools.genericui.window.PipConfig
 import com.nexustools.genericui.window.TitleBar
 import com.nexustools.genericui.window.TitleCapabilities
 import com.nexustools.genericui.window.WindowAspectRatioHelper
@@ -53,7 +51,6 @@ open class IosWindowImpl(
 ), WindowNativeImpl<UikitViewHandle> {
 
     val safeAreaTracker: MobileSafeAreaTracker get() = rootViewController.safeAreaTracker
-    val pipController: MobilePipController = MobilePipController()
 
     protected val contentHostView: UikitFlexContainerView = UikitFlexContainerView(UikitEnvironment.mainScreenBounds())
     protected val navigationBar: UINavigationBar = UINavigationBar(CGRectMake(0.0, 0.0, 390.0, 44.0))
@@ -344,24 +341,6 @@ open class IosWindowImpl(
         layoutWindowRegions()
     }
 
-    override fun enterPictureInPicture(config: PipConfig): Boolean {
-        pipController.configure(config)
-        pipController.onPictureInPictureModeChanged(true)
-        windowState = WindowState.PICTURE_IN_PICTURE
-        resizeListener?.invoke(buildWindowConfiguration())
-        return true
-    }
-
-    override fun exitPictureInPicture() {
-        pipController.onPictureInPictureModeChanged(false)
-        if (windowState == WindowState.PICTURE_IN_PICTURE) {
-            windowState = WindowState.NORMAL
-        }
-        resizeListener?.invoke(buildWindowConfiguration())
-    }
-
-    override fun isInPictureInPicture(): Boolean = pipController.isInPictureInPictureMode
-
     override fun showWindow() {
         if (uiWindow == null) {
             val win = UIWindow(frame = CGRectMake(0.0, 0.0, windowSize.width.toDouble(), windowSize.height.toDouble()))
@@ -489,8 +468,7 @@ open class IosWindowImpl(
             densityScale = scale,
             themeMode = theme,
             windowState = windowState,
-            isFullscreen = fullscreen,
-            isInPictureInPicture = isInPictureInPicture()
+            isFullscreen = fullscreen
         )
     }
 

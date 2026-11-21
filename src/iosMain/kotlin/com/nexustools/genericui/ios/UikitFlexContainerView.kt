@@ -30,6 +30,7 @@ class UikitFlexContainerView(
     var itemGapPt: Double = 0.0
     var wrapLines: Boolean = false
     var explicitBoundsOverride: CValue<CGRect>? = null
+    internal var backdropChromeView: UIView? = null
 
     private val preferredChildSizes = LinkedHashMap<UIView, Pair<Double, Double>>()
 
@@ -46,7 +47,7 @@ class UikitFlexContainerView(
         val availW = size.useContents { width }
         val availH = size.useContents { height }
         val isRow = flexDirection == FlexDirection.ROW || flexDirection == FlexDirection.ROW_REVERSE
-        val visibleChildren = subviews.filterIsInstance<UIView>().filter { !it.hidden }
+        val visibleChildren = subviews.filterIsInstance<UIView>().filter { !it.hidden && it !== backdropChromeView }
         if (visibleChildren.isEmpty()) {
             return CGSizeMake(
                 (paddingInsets.left + paddingInsets.right).toDouble(),
@@ -79,6 +80,11 @@ class UikitFlexContainerView(
         super.layoutSubviews()
         val totalW = bounds.useContents { size.width }
         val totalH = bounds.useContents { size.height }
+        backdropChromeView?.let { chrome ->
+            chrome.setFrame(bounds)
+            chrome.layer.cornerRadius = layer.cornerRadius
+            chrome.clipsToBounds = clipsToBounds
+        }
         if (totalW <= 0.0 && totalH <= 0.0) return
 
         val contentX = paddingInsets.left.toDouble()
@@ -86,7 +92,7 @@ class UikitFlexContainerView(
         val contentW = max(0.0, totalW - paddingInsets.left - paddingInsets.right)
         val contentH = max(0.0, totalH - paddingInsets.top - paddingInsets.bottom)
 
-        val visibleChildren = subviews.filterIsInstance<UIView>().filter { !it.hidden }
+        val visibleChildren = subviews.filterIsInstance<UIView>().filter { !it.hidden && it !== backdropChromeView }
         if (visibleChildren.isEmpty()) return
 
         val isRow = flexDirection == FlexDirection.ROW || flexDirection == FlexDirection.ROW_REVERSE

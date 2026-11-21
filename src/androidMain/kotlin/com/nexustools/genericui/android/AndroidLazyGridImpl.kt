@@ -5,11 +5,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.enums.bootstrap.FlexWrap
 import com.nexustools.genericui.mobile.system.MobileLazyViewportPool
 import com.nexustools.genericui.nativeimpl.lazy.LazyGridNativeImpl
+import com.nexustools.genericui.threading.GenericUiThreading
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 /**
@@ -19,6 +22,8 @@ import kotlin.math.roundToInt
  */
 class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclerview.widget.RecyclerView", "lazy-grid"), LazyGridNativeImpl<AndroidViewHandle> {
     val viewportPool: MobileLazyViewportPool = MobileLazyViewportPool()
+    private val viewportLock = Any()
+    private val pendingLogicViewportSync = AtomicBoolean(false)
 
     private var columnsCount: Int = 3
     private var minColumnWidthPx: Int = 0
@@ -34,13 +39,13 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
     var estimatedRowHeightPx: Int = 120
 
     val firstVisibleIndex: Int
-        get() = viewportPool.firstVisibleIndex
+        get() = synchronized(viewportLock) { viewportPool.firstVisibleIndex }
 
     val lastVisibleIndex: Int
-        get() = viewportPool.lastVisibleIndex
+        get() = synchronized(viewportLock) { viewportPool.lastVisibleIndex }
 
     val mountedItemIndices: Set<Int>
-        get() = viewportPool.mountedIndices
+        get() = synchronized(viewportLock) { viewportPool.mountedIndices }
 
     init {
         setFlexDirection(FlexDirection.ROW)
@@ -91,8 +96,7 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
                         width = (w / density).roundToInt(),
                         height = (h / density).roundToInt()
                     )
-                    recomputeVisibleWindow()
-                    onViewportScrollChangedListener?.invoke(v.scrollY / density, h / density)
+                    dispatchViewportSync(v.scrollY / density, h / density)
                 }
             }
             addView(
@@ -105,6 +109,26 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
         }
     }
 
+    private fun dispatchViewportSync(logicalScroll: Float, logicalExtent: Float) {
+        if (GenericUI.activeFactory != null &&
+            GenericUiThreading.isSplitThreadingEnabled &&
+            !GenericUiThreading.isOnLogicThread()
+        ) {
+            if (pendingLogicViewportSync.compareAndSet(false, true)) {
+                GenericUiThreading.runOnLogic {
+                    pendingLogicViewportSync.set(false)
+                    val latestScroll = nativeWidget.scrollY.coerceAtLeast(0).toFloat()
+                    val latestExtent = nativeWidget.bounds.height.coerceAtLeast(estimatedRowHeightPx).toFloat()
+                    recomputeVisibleWindow()
+                    onViewportScrollChangedListener?.invoke(latestScroll, latestExtent)
+                }
+            }
+        } else {
+            recomputeVisibleWindow()
+            onViewportScrollChangedListener?.invoke(logicalScroll, logicalExtent)
+        }
+    }
+
     private fun onNativeScrolled(rawScrollY: Int, rawViewportH: Int) {
         if (isUpdatingFromMetrics) return
         val density = runCatching {
@@ -113,8 +137,7 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
         val logicalScroll = (rawScrollY / density).coerceAtLeast(0f)
         val logicalExtent = (rawViewportH / density).coerceAtLeast(estimatedRowHeightPx.toFloat())
         nativeWidget.scrollY = logicalScroll.roundToInt()
-        recomputeVisibleWindow()
-        onViewportScrollChangedListener?.invoke(logicalScroll, logicalExtent)
+        dispatchViewportSync(logicalScroll, logicalExtent)
     }
 
     override fun setColumns(columns: Int) {
@@ -141,7 +164,9 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
 
     override fun setEstimatedRowExtent(rowHeightPx: Float, overscanRows: Int) {
         estimatedRowHeightPx = rowHeightPx.roundToInt().coerceAtLeast(1)
-        viewportPool.overscanItems = overscanRows.coerceAtLeast(0)
+        synchronized(viewportLock) {
+            viewportPool.overscanItems = overscanRows.coerceAtLeast(0)
+        }
     }
 
     override fun setOnViewportScrollChanged(listener: ((scrollOffsetPx: Float, viewportExtentPx: Float) -> Unit)?) {
@@ -183,10 +208,12 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
     }
 
     override fun setItemCount(count: Int, itemFactory: (index: Int) -> NativeImpl<*>) {
-        totalItemCount = count.coerceAtLeast(0)
-        this.itemFactory = itemFactory
-        viewportPool.clearAll { _, impl ->
-            (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+        synchronized(viewportLock) {
+            totalItemCount = count.coerceAtLeast(0)
+            this.itemFactory = itemFactory
+            viewportPool.clearAll { _, impl ->
+                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+            }
         }
         recomputeVisibleWindow()
     }
@@ -210,41 +237,45 @@ class AndroidLazyGridImpl : AndroidBaseContainerNativeImpl("androidx.recyclervie
     }
 
     fun recomputeVisibleWindow() {
-        val factory = itemFactory
-        if (factory == null || totalItemCount <= 0) {
-            viewportPool.clearAll { _, impl ->
-                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
-            }
-            return
-        }
-        val effectiveCols = resolveEffectiveColumns()
-        val viewportHeight = nativeWidget.bounds.height.coerceAtLeast(estimatedRowHeightPx).toFloat()
-        val visibleRange = viewportPool.computeVisibleRange(
-            scrollOffsetPx = nativeWidget.scrollY.coerceAtLeast(0).toFloat(),
-            viewportSizePx = viewportHeight,
-            itemExtentPx = estimatedRowHeightPx.toFloat(),
-            totalItemCount = totalItemCount,
-            columns = effectiveCols
-        )
-        viewportPool.updateViewportWindow(
-            visibleRange = visibleRange,
-            itemFactory = factory,
-            onMountItem = { idx, impl ->
-                (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
-                (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
-                    handle.attributes["data-lazy-grid-index"] = idx.toString()
-                    nativeWidget.addChild(handle)
+        synchronized(viewportLock) {
+            val factory = itemFactory
+            if (factory == null || totalItemCount <= 0) {
+                viewportPool.clearAll { _, impl ->
+                    (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
                 }
-            },
-            onUnmountItem = { _, impl ->
-                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+                return
             }
-        )
+            val effectiveCols = resolveEffectiveColumns()
+            val viewportHeight = nativeWidget.bounds.height.coerceAtLeast(estimatedRowHeightPx).toFloat()
+            val visibleRange = viewportPool.computeVisibleRange(
+                scrollOffsetPx = nativeWidget.scrollY.coerceAtLeast(0).toFloat(),
+                viewportSizePx = viewportHeight,
+                itemExtentPx = estimatedRowHeightPx.toFloat(),
+                totalItemCount = totalItemCount,
+                columns = effectiveCols
+            )
+            viewportPool.updateViewportWindow(
+                visibleRange = visibleRange,
+                itemFactory = factory,
+                onMountItem = { idx, impl ->
+                    (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
+                    (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
+                        handle.attributes["data-lazy-grid-index"] = idx.toString()
+                        nativeWidget.addChild(handle)
+                    }
+                },
+                onUnmountItem = { _, impl ->
+                    (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+                }
+            )
+        }
     }
 
     override fun dispose() {
-        viewportPool.clearAll { _, impl ->
-            (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+        synchronized(viewportLock) {
+            viewportPool.clearAll { _, impl ->
+                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+            }
         }
         onViewportScrollChangedListener = null
         super.dispose()

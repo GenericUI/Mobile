@@ -11,6 +11,7 @@ import android.widget.TextView
 import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
 import com.nexustools.genericui.enums.bootstrap.BootstrapSize
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
+import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
 import com.nexustools.genericui.style.color.BootstrapColorPalette
 
@@ -41,6 +42,36 @@ open class AndroidButtonImpl(
         AndroidControlTintRenderUtil.createNativeOrTintedButton(context) { this }
 
     override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
+
+    override fun resolveDefaultPaddingPx(): EdgeInsets {
+        if (getPadding() != EdgeInsets.ZERO || getPaddingScale() != null) {
+            return super.resolveDefaultPaddingPx()
+        }
+        if (this is AndroidStyledButtonImpl) {
+            return super.resolveDefaultPaddingPx()
+        }
+        val (hDp, vDp) = when (getSize()) {
+            BootstrapSize.SM -> 12f to 6f
+            BootstrapSize.LG -> 20f to 10f
+            else -> 16f to 8f
+        }
+        val hPx = AndroidViewHandle.dpToPx(hDp)
+        val vPx = AndroidViewHandle.dpToPx(vDp)
+        return EdgeInsets(vPx, hPx, vPx, hPx)
+    }
+
+    private fun applyResolvedButtonPadding(tv: TextView): Boolean {
+        val pad = resolveDefaultPaddingPx()
+        if (tv.paddingLeft != pad.left ||
+            tv.paddingTop != pad.top ||
+            tv.paddingRight != pad.right ||
+            tv.paddingBottom != pad.bottom
+        ) {
+            tv.setPadding(pad.left, pad.top, pad.right, pad.bottom)
+            return true
+        }
+        return false
+    }
 
     override fun syncNativeBootstrapAppearance() {
         super.syncNativeBootstrapAppearance()
@@ -122,8 +153,14 @@ open class AndroidButtonImpl(
         if (type == BootstrapType.NONE && (borderRadius == null || borderRadius == BorderRadiusStyle.NONE)) {
             lastRenderedBgWidth = -1
             lastRenderedBgHeight = -1
+            applyResolvedButtonPadding(tv)
             return
         }
+        val expectedPad = resolveDefaultPaddingPx()
+        val hadExpectedPadding = tv.paddingLeft == expectedPad.left &&
+            tv.paddingTop == expectedPad.top &&
+            tv.paddingRight == expectedPad.right &&
+            tv.paddingBottom == expectedPad.bottom
         val isDark = AndroidViewHandle.isDarkTheme()
         val activeTheme = BootstrapColorPalette.activeThemeConfig
         val outline = isOutline()
@@ -147,6 +184,10 @@ open class AndroidButtonImpl(
             tv.background = AndroidTintedButtonDrawable(tv.resources, tintedBmp)
             lastRenderedBgWidth = w
             lastRenderedBgHeight = h
+        }
+        val padChanged = applyResolvedButtonPadding(tv)
+        if (padChanged && !hadExpectedPadding) {
+            tv.post { tv.requestLayout() }
         }
     }
 
@@ -198,6 +239,7 @@ open class AndroidButtonImpl(
                 }
                 tv.isAllCaps = false
                 tv.gravity = Gravity.CENTER
+                tv.includeFontPadding = false
                 tv.setOnClickListener {
                     if (isEnabled()) {
                         dispatchClick()
@@ -210,21 +252,18 @@ open class AndroidButtonImpl(
                 val outline = isOutline()
                 val size = getSize()
 
-                val (defaultHPadDp, defaultVPadDp, minHeightDp, defaultSp) = when (size) {
-                    BootstrapSize.SM -> floatArrayOf(10f, 5f, 32f, 12f)
-                    BootstrapSize.LG -> floatArrayOf(18f, 10f, 46f, 15f)
-                    else -> floatArrayOf(14f, 8f, 38f, 13f)
+                val (minHeightDp, defaultSp) = when (size) {
+                    BootstrapSize.SM -> 32f to 12f
+                    BootstrapSize.LG -> 46f to 15f
+                    else -> 38f to 13f
                 }
 
-                val p = getPadding()
-                if (p.left == 0 && p.top == 0 && p.right == 0 && p.bottom == 0 && getPaddingScale() == null) {
-                    val hPadPx = AndroidViewHandle.dpToPx(defaultHPadDp)
-                    val vPadPx = AndroidViewHandle.dpToPx(defaultVPadDp)
-                    tv.setPadding(hPadPx, vPadPx, hPadPx, vPadPx)
-                }
                 val minHPx = AndroidViewHandle.dpToPx(minHeightDp)
                 tv.minHeight = minHPx
                 tv.minimumHeight = minHPx
+                val minWPx = if (nativeWidget.text.isNotEmpty()) 0 else minHPx
+                tv.minWidth = minWPx
+                tv.minimumWidth = minWPx
 
                 tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, defaultSp)
                 tv.setTypeface(null, Typeface.BOLD)
@@ -236,8 +275,32 @@ open class AndroidButtonImpl(
                     themeConfig = activeTheme
                 )
                 val fgArgb = fgColor.toArgbInt()
-                val borderRadius = getBorderRadius()
+                val icon = iconName
+                val ctx = tv.context ?: AndroidViewHandle.activeContext
+                val drawable = if (!icon.isNullOrBlank() && ctx != null) {
+                    AndroidImageImpl.resolveDrawable(ctx, icon, fgArgb)
+                } else {
+                    null
+                }
+                val displayText = if (
+                    drawable == null &&
+                    !icon.isNullOrBlank() &&
+                    !icon.startsWith("res://") &&
+                    !icon.startsWith("http")
+                ) {
+                    if (nativeWidget.text.isNotEmpty()) "$icon ${nativeWidget.text}" else icon
+                } else {
+                    nativeWidget.text
+                }
+                tv.setHorizontallyScrolling(false)
+                tv.scrollX = 0
+                tv.scrollY = 0
+                val targetMaxLines = if (displayText.contains('\n')) Int.MAX_VALUE else 1
+                if (tv.maxLines != targetMaxLines) {
+                    tv.maxLines = targetMaxLines
+                }
 
+                val borderRadius = getBorderRadius()
                 if (type == BootstrapType.NONE && (borderRadius == null || borderRadius == BorderRadiusStyle.NONE)) {
                     tv.backgroundTintList = null
                     lastRenderedBgWidth = -1
@@ -256,25 +319,10 @@ open class AndroidButtonImpl(
                     refreshTintedBackgroundForSize(tv, w, h)
                     tv.setTextColor(fgArgb)
                 }
+                val padChanged = applyResolvedButtonPadding(tv)
 
-                val icon = iconName
-                val ctx = tv.context ?: AndroidViewHandle.activeContext
-                val drawable = if (!icon.isNullOrBlank() && ctx != null) {
-                    AndroidImageImpl.resolveDrawable(ctx, icon, fgArgb)
-                } else {
-                    null
-                }
-                val displayText = if (
-                    drawable == null &&
-                    !icon.isNullOrBlank() &&
-                    !icon.startsWith("res://") &&
-                    !icon.startsWith("http")
-                ) {
-                    if (nativeWidget.text.isNotEmpty()) "$icon ${nativeWidget.text}" else icon
-                } else {
-                    nativeWidget.text
-                }
-                if (tv.text?.toString() != displayText) {
+                val textChanged = tv.text?.toString() != displayText
+                if (textChanged) {
                     tv.text = displayText
                 }
                 if (drawable != null) {
@@ -284,6 +332,9 @@ open class AndroidButtonImpl(
                     tv.compoundDrawablePadding = if (nativeWidget.text.isNotEmpty()) AndroidViewHandle.dpToPx(6) else 0
                 } else {
                     tv.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+                }
+                if (padChanged || textChanged) {
+                    tv.requestLayout()
                 }
                 tv.invalidate()
                 nativeWidget.onViewMutated?.invoke()

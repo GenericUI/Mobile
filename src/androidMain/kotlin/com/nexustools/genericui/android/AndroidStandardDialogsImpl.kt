@@ -34,29 +34,31 @@ class AndroidStandardDialogsImpl : StandardDialogsNativeImpl {
     ) {
         val activity = resolveActiveActivity()
         if (activity == null) {
-            onDismissed()
+            AndroidViewHandle.dispatchOnLogicThread { onDismissed() }
             return
         }
-        runCatching {
-            var completed = false
-            AlertDialog.Builder(activity)
-                .setTitle(title)
-                .setMessage(message)
-                .setPositiveButton(okButtonText.ifBlank { "OK" }) { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onDismissed()
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                var completed = false
+                AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton(okButtonText.ifBlank { "OK" }) { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onDismissed() }
+                        }
                     }
-                }
-                .setOnCancelListener {
-                    if (!completed) {
-                        completed = true
-                        onDismissed()
+                    .setOnCancelListener {
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onDismissed() }
+                        }
                     }
-                }
-                .show()
-        }.onFailure {
-            onDismissed()
+                    .show()
+            }.onFailure {
+                AndroidViewHandle.dispatchOnLogicThread { onDismissed() }
+            }
         }
     }
 
@@ -71,35 +73,37 @@ class AndroidStandardDialogsImpl : StandardDialogsNativeImpl {
     ) {
         val activity = resolveActiveActivity()
         if (activity == null) {
-            onResult(true)
+            AndroidViewHandle.dispatchOnLogicThread { onResult(true) }
             return
         }
-        runCatching {
-            var completed = false
-            AlertDialog.Builder(activity)
-                .setTitle(title)
-                .setMessage(message)
-                .setPositiveButton(confirmText.ifBlank { "OK" }) { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(true)
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                var completed = false
+                AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton(confirmText.ifBlank { "OK" }) { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(true) }
+                        }
                     }
-                }
-                .setNegativeButton(cancelText.ifBlank { "Cancel" }) { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(false)
+                    .setNegativeButton(cancelText.ifBlank { "Cancel" }) { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(false) }
+                        }
                     }
-                }
-                .setOnCancelListener {
-                    if (!completed) {
-                        completed = true
-                        onResult(false)
+                    .setOnCancelListener {
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(false) }
+                        }
                     }
-                }
-                .show()
-        }.onFailure {
-            onResult(true)
+                    .show()
+            }.onFailure {
+                AndroidViewHandle.dispatchOnLogicThread { onResult(true) }
+            }
         }
     }
 
@@ -115,46 +119,49 @@ class AndroidStandardDialogsImpl : StandardDialogsNativeImpl {
     ) {
         val activity = resolveActiveActivity()
         if (activity == null) {
-            onResult(defaultValue)
+            AndroidViewHandle.dispatchOnLogicThread { onResult(defaultValue) }
             return
         }
-        runCatching {
-            var completed = false
-            val input = AppCompatEditText(activity).apply {
-                setText(defaultValue)
-                hint = placeholder
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                var completed = false
+                val input = AppCompatEditText(activity).apply {
+                    setText(defaultValue)
+                    hint = placeholder
+                }
+                val container = FrameLayout(activity).apply {
+                    val padH = AndroidViewHandle.dpToPx(20)
+                    val padV = AndroidViewHandle.dpToPx(8)
+                    setPadding(padH, padV, padH, padV)
+                    addView(input)
+                }
+                AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMessage(message.takeIf { it.isNotBlank() })
+                    .setView(container)
+                    .setPositiveButton(confirmText.ifBlank { "OK" }) { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            val textValue = input.text?.toString().orEmpty()
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(textValue) }
+                        }
+                    }
+                    .setNegativeButton(cancelText.ifBlank { "Cancel" }) { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
+                    }
+                    .setOnCancelListener {
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
+                    }
+                    .show()
+            }.onFailure {
+                AndroidViewHandle.dispatchOnLogicThread { onResult(defaultValue) }
             }
-            val container = FrameLayout(activity).apply {
-                val padH = AndroidViewHandle.dpToPx(20)
-                val padV = AndroidViewHandle.dpToPx(8)
-                setPadding(padH, padV, padH, padV)
-                addView(input)
-            }
-            AlertDialog.Builder(activity)
-                .setTitle(title)
-                .setMessage(message.takeIf { it.isNotBlank() })
-                .setView(container)
-                .setPositiveButton(confirmText.ifBlank { "OK" }) { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(input.text?.toString().orEmpty())
-                    }
-                }
-                .setNegativeButton(cancelText.ifBlank { "Cancel" }) { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
-                    }
-                }
-                .setOnCancelListener {
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
-                    }
-                }
-                .show()
-        }.onFailure {
-            onResult(defaultValue)
         }
     }
 
@@ -168,38 +175,41 @@ class AndroidStandardDialogsImpl : StandardDialogsNativeImpl {
     ) {
         val activity = resolveActiveActivity()
         if (activity == null) {
-            onResult(selectedIndex.takeIf { it in options.indices })
+            AndroidViewHandle.dispatchOnLogicThread { onResult(selectedIndex.takeIf { it in options.indices }) }
             return
         }
-        runCatching {
-            var completed = false
-            var currentChoice = selectedIndex.takeIf { it in options.indices } ?: 0
-            AlertDialog.Builder(activity)
-                .setTitle(title)
-                .setSingleChoiceItems(options.toTypedArray(), currentChoice) { _, which ->
-                    currentChoice = which
-                }
-                .setPositiveButton("OK") { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(currentChoice.takeIf { it in options.indices })
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                var completed = false
+                var currentChoice = selectedIndex.takeIf { it in options.indices } ?: 0
+                AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setSingleChoiceItems(options.toTypedArray(), currentChoice) { _, which ->
+                        currentChoice = which
                     }
-                }
-                .setNegativeButton("Cancel") { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
+                    .setPositiveButton("OK") { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            val chosen = currentChoice.takeIf { it in options.indices }
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(chosen) }
+                        }
                     }
-                }
-                .setOnCancelListener {
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
+                    .setNegativeButton("Cancel") { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
                     }
-                }
-                .show()
-        }.onFailure {
-            onResult(selectedIndex.takeIf { it in options.indices })
+                    .setOnCancelListener {
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
+                    }
+                    .show()
+            }.onFailure {
+                AndroidViewHandle.dispatchOnLogicThread { onResult(selectedIndex.takeIf { it in options.indices }) }
+            }
         }
     }
 
@@ -211,116 +221,119 @@ class AndroidStandardDialogsImpl : StandardDialogsNativeImpl {
     ) {
         val activity = resolveActiveActivity()
         if (activity == null) {
-            onResult(initialColor)
+            AndroidViewHandle.dispatchOnLogicThread { onResult(initialColor) }
             return
         }
-        runCatching {
-            var completed = false
-            var curR = initialColor.r.coerceIn(0, 255)
-            var curG = initialColor.g.coerceIn(0, 255)
-            var curB = initialColor.b.coerceIn(0, 255)
-            var curA = initialColor.a.coerceIn(0, 255)
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                var completed = false
+                var curR = initialColor.r.coerceIn(0, 255)
+                var curG = initialColor.g.coerceIn(0, 255)
+                var curB = initialColor.b.coerceIn(0, 255)
+                var curA = initialColor.a.coerceIn(0, 255)
 
-            val pad = AndroidViewHandle.dpToPx(16)
-            val root = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(pad, pad, pad, pad / 2)
-            }
+                val pad = AndroidViewHandle.dpToPx(16)
+                val root = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(pad, pad, pad, pad / 2)
+                }
 
-            val previewSwatch = View(activity).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    AndroidViewHandle.dpToPx(48)
-                ).apply {
-                    bottomMargin = AndroidViewHandle.dpToPx(8)
+                val previewSwatch = View(activity).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        AndroidViewHandle.dpToPx(48)
+                    ).apply {
+                        bottomMargin = AndroidViewHandle.dpToPx(8)
+                    }
                 }
-            }
-            val hexLabel = TextView(activity).apply {
-                gravity = Gravity.CENTER
-                typeface = Typeface.MONOSPACE
-                textSize = 13f
-                setPadding(0, 0, 0, AndroidViewHandle.dpToPx(8))
-            }
-
-            fun updateSwatchPreview() {
-                val argb = Color.argb(curA, curR, curG, curB)
-                previewSwatch.background = GradientDrawable().apply {
-                    setColor(argb)
-                    cornerRadius = AndroidViewHandle.dpToPxFloat(8f)
-                    setStroke(AndroidViewHandle.dpToPx(1), Color.GRAY)
-                }
-                hexLabel.text = String.format("#%02X%02X%02X%02X", curR, curG, curB, curA)
-            }
-
-            fun addChannelSlider(label: String, initialValue: Int, onUpdate: (Int) -> Unit) {
-                val row = LinearLayout(activity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, AndroidViewHandle.dpToPx(4), 0, AndroidViewHandle.dpToPx(4))
-                }
-                val titleView = TextView(activity).apply {
-                    text = label
-                    layoutParams = LinearLayout.LayoutParams(AndroidViewHandle.dpToPx(48), LinearLayout.LayoutParams.WRAP_CONTENT)
-                }
-                val valueView = TextView(activity).apply {
-                    text = initialValue.toString()
-                    gravity = Gravity.END
+                val hexLabel = TextView(activity).apply {
+                    gravity = Gravity.CENTER
                     typeface = Typeface.MONOSPACE
-                    layoutParams = LinearLayout.LayoutParams(AndroidViewHandle.dpToPx(40), LinearLayout.LayoutParams.WRAP_CONTENT)
+                    textSize = 13f
+                    setPadding(0, 0, 0, AndroidViewHandle.dpToPx(8))
                 }
-                val seek = SeekBar(activity).apply {
-                    max = 255
-                    progress = initialValue
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                            onUpdate(progress)
-                            valueView.text = progress.toString()
-                            updateSwatchPreview()
+
+                fun updateSwatchPreview() {
+                    val argb = Color.argb(curA, curR, curG, curB)
+                    previewSwatch.background = GradientDrawable().apply {
+                        setColor(argb)
+                        cornerRadius = AndroidViewHandle.dpToPxFloat(8f)
+                        setStroke(AndroidViewHandle.dpToPx(1), Color.GRAY)
+                    }
+                    hexLabel.text = String.format("#%02X%02X%02X%02X", curR, curG, curB, curA)
+                }
+
+                fun addChannelSlider(label: String, initialValue: Int, onUpdate: (Int) -> Unit) {
+                    val row = LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, AndroidViewHandle.dpToPx(4), 0, AndroidViewHandle.dpToPx(4))
+                    }
+                    val titleView = TextView(activity).apply {
+                        text = label
+                        layoutParams = LinearLayout.LayoutParams(AndroidViewHandle.dpToPx(48), LinearLayout.LayoutParams.WRAP_CONTENT)
+                    }
+                    val valueView = TextView(activity).apply {
+                        text = initialValue.toString()
+                        gravity = Gravity.END
+                        typeface = Typeface.MONOSPACE
+                        layoutParams = LinearLayout.LayoutParams(AndroidViewHandle.dpToPx(40), LinearLayout.LayoutParams.WRAP_CONTENT)
+                    }
+                    val seek = SeekBar(activity).apply {
+                        max = 255
+                        progress = initialValue
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                                onUpdate(progress)
+                                valueView.text = progress.toString()
+                                updateSwatchPreview()
+                            }
+
+                            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                        })
+                    }
+                    row.addView(titleView)
+                    row.addView(seek)
+                    row.addView(valueView)
+                    root.addView(row)
+                }
+
+                root.addView(previewSwatch)
+                root.addView(hexLabel)
+                addChannelSlider("Red", curR) { curR = it }
+                addChannelSlider("Green", curG) { curG = it }
+                addChannelSlider("Blue", curB) { curB = it }
+                addChannelSlider("Alpha", curA) { curA = it }
+                updateSwatchPreview()
+
+                AlertDialog.Builder(activity)
+                    .setTitle(title.ifBlank { "Choose Color" })
+                    .setView(root)
+                    .setPositiveButton("OK") { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            val picked = RgbaColor(curR, curG, curB, curA)
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(picked) }
                         }
-
-                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-                    })
-                }
-                row.addView(titleView)
-                row.addView(seek)
-                row.addView(valueView)
-                root.addView(row)
+                    }
+                    .setNegativeButton("Cancel") { _, _ ->
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
+                    }
+                    .setOnCancelListener {
+                        if (!completed) {
+                            completed = true
+                            AndroidViewHandle.dispatchOnLogicThread { onResult(null) }
+                        }
+                    }
+                    .show()
+            }.onFailure {
+                AndroidViewHandle.dispatchOnLogicThread { onResult(initialColor) }
             }
-
-            root.addView(previewSwatch)
-            root.addView(hexLabel)
-            addChannelSlider("Red", curR) { curR = it }
-            addChannelSlider("Green", curG) { curG = it }
-            addChannelSlider("Blue", curB) { curB = it }
-            addChannelSlider("Alpha", curA) { curA = it }
-            updateSwatchPreview()
-
-            AlertDialog.Builder(activity)
-                .setTitle(title.ifBlank { "Choose Color" })
-                .setView(root)
-                .setPositiveButton("OK") { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(RgbaColor(curR, curG, curB, curA))
-                    }
-                }
-                .setNegativeButton("Cancel") { _, _ ->
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
-                    }
-                }
-                .setOnCancelListener {
-                    if (!completed) {
-                        completed = true
-                        onResult(null)
-                    }
-                }
-                .show()
-        }.onFailure {
-            onResult(initialColor)
         }
     }
 

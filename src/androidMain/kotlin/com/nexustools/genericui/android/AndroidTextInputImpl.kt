@@ -47,8 +47,10 @@ class AndroidTextInputImpl(
     private var labeledEditText: TextInputEditText? = null
     private var activeEditText: EditText? = null
     private var isShowingLabeledMode: Boolean = false
+    private var initialized: Boolean = false
 
     init {
+        initialized = true
         syncAndroidView()
     }
 
@@ -270,6 +272,7 @@ class AndroidTextInputImpl(
 
     override fun syncAndroidView() {
         super.syncAndroidView()
+        if (!initialized) return
         AndroidViewHandle.runOnMainThread {
             runCatching {
                 val container = nativeWidget.androidView as? FrameLayout ?: return@runCatching

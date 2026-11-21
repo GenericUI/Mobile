@@ -66,6 +66,7 @@ class AndroidBitmapImageCodecImpl(
                     ctx.assets.open(rel).use { it.readBytes() }
                 }
                 trimmed.startsWith("res://") -> readAndroidResourceBytes(ctx, trimmed.removePrefix("res://"))
+                trimmed.startsWith("gui/") || trimmed.startsWith("app/") -> readAndroidResourceBytes(ctx, trimmed)
                 else -> null
             }
         }.getOrNull()?.takeIf { it.isNotEmpty() }
@@ -108,15 +109,19 @@ class AndroidBitmapImageCodecImpl(
                 val bitmap = ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                     decoder.isMutableRequired = false
-                    decoder.isUnpremultipliedRequired = !options.premultiplyAlpha
                     val naturalW = info.size.width
                     val naturalH = info.size.height
                     val (scaledW, scaledH) = computeTargetDimensions(naturalW, naturalH, options)
-                    if (scaledW != null && scaledH != null && (scaledW != naturalW || scaledH != naturalH)) {
-                        decoder.setTargetSize(scaledW, scaledH)
+                    val needsResize = scaledW != null && scaledH != null && (scaledW != naturalW || scaledH != naturalH)
+                    // ImageDecoder throws IllegalStateException if isUnpremultipliedRequired=true is paired
+                    // with setTargetSize(...). Decode premultiplied when resizing; Bitmap.getPixels() always
+                    // un-premultiplies back into straight ARGB ints afterward.
+                    decoder.isUnpremultipliedRequired = !options.premultiplyAlpha && !needsResize
+                    if (needsResize) {
+                        decoder.setTargetSize(scaledW!!, scaledH!!)
                     }
                 }
-                val converted = bitmapToImageBuffer(bitmap)
+                val converted = bitmapToImageBuffer(bitmap, premultiplyOutput = options.premultiplyAlpha)
                 if (!bitmap.isRecycled) bitmap.recycle()
                 if (converted != null) return converted
             }
@@ -131,10 +136,22 @@ class AndroidBitmapImageCodecImpl(
                 options.targetWidth,
                 options.targetHeight
             )
+            val (targetScaledW, targetScaledH) = computeTargetDimensions(
+                boundsOpts.outWidth,
+                boundsOpts.outHeight,
+                options
+            )
+            val needsScaleOrSample = sampleSize > 1 ||
+                (targetScaledW != null && targetScaledH != null &&
+                    (targetScaledW != boundsOpts.outWidth || targetScaledH != boundsOpts.outHeight)) ||
+                options.targetWidth != null ||
+                options.targetHeight != null
             val decodeOpts = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
-                inPremultiplied = options.premultiplyAlpha
+                // Bitmap.createScaledBitmap throws IllegalArgumentException on unpremultiplied bitmaps,
+                // and Bitmap.getPixels() always returns straight unpremultiplied ARGB values anyway.
+                inPremultiplied = options.premultiplyAlpha || needsScaleOrSample
             }
             val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts) ?: return@runCatching null
             val (scaledW, scaledH) = computeTargetDimensions(decoded.width, decoded.height, options)
@@ -149,7 +166,7 @@ class AndroidBitmapImageCodecImpl(
             } else {
                 decoded
             }
-            val buffer = bitmapToImageBuffer(finalBitmap)
+            val buffer = bitmapToImageBuffer(finalBitmap, premultiplyOutput = options.premultiplyAlpha)
             if (!finalBitmap.isRecycled) finalBitmap.recycle()
             buffer
         }.getOrNull()
@@ -174,7 +191,7 @@ class AndroidBitmapImageCodecImpl(
                 val canvas = Canvas(bmp)
                 drawable.setBounds(0, 0, w, h)
                 drawable.draw(canvas)
-                val frameBuf = bitmapToImageBuffer(bmp)
+                val frameBuf = bitmapToImageBuffer(bmp, premultiplyOutput = options.premultiplyAlpha)
                 if (!bmp.isRecycled) bmp.recycle()
                 val loops = if (drawable.repeatCount == AnimatedImageDrawable.REPEAT_INFINITE) {
                     0
@@ -237,13 +254,46 @@ class AndroidBitmapImageCodecImpl(
     }
 
     private fun readAndroidResourceBytes(ctx: Context, resPath: String): ByteArray? {
-        val parts = resPath.trimStart('/').split('/', limit = 2)
-        if (parts.size != 2) return null
-        val defType = parts[0]
-        val entryName = parts[1].substringBeforeLast('.')
-        val resId = ctx.resources.getIdentifier(entryName, defType, ctx.packageName)
+        val clean = resPath.replace('\\', '/').trimStart('/')
+        val parts = clean.split('/').filter { it.isNotEmpty() }
+        if (parts.size < 2) return null
+
+        val defType = when {
+            parts.size >= 5 && parts[0].equals("gui", ignoreCase = true) && parts[1].equals("ext", ignoreCase = true) ->
+                parts[4].lowercase()
+            parts[0].lowercase() in setOf("gui", "app") -> parts[1].lowercase()
+            else -> parts[0].lowercase()
+        }
+        val fileStem = parts.last().substringBeforeLast('.').replace('-', '_').lowercase()
+        val flatCandidate = clean.substringBeforeLast('.').replace('/', '_').replace('-', '_').lowercase()
+        val matchedTableRes = com.nexustools.genericui.res.Resources.activeTable.let { table ->
+            val targetType = when (defType) {
+                "mipmap" -> com.nexustools.genericui.resources.ResourceType.DRAWABLE
+                "raw" -> com.nexustools.genericui.resources.ResourceType.RAW
+                "font" -> com.nexustools.genericui.resources.ResourceType.FONT
+                "xml" -> com.nexustools.genericui.resources.ResourceType.XML
+                else -> com.nexustools.genericui.resources.ResourceType.DRAWABLE
+            }
+            table.findResourceId(targetType, fileStem) ?: table.getDrawableByName(fileStem)?.resId
+        }
+        val candidateNames = linkedSetOf<String>()
+        matchedTableRes?.flatName?.takeIf { it.isNotBlank() }?.let { candidateNames.add(it) }
+        if (flatCandidate.startsWith("gui_") || flatCandidate.startsWith("app_")) {
+            candidateNames.add(flatCandidate)
+        }
+        candidateNames.add(fileStem)
+
+        var resId = 0
+        for (candidate in candidateNames) {
+            resId = ctx.resources.getIdentifier(candidate, defType, ctx.packageName)
+            if (resId != 0) break
+            if (defType == "drawable") {
+                resId = ctx.resources.getIdentifier(candidate, "mipmap", ctx.packageName)
+                if (resId != 0) break
+            }
+        }
         if (resId == 0) return null
-        if (defType == "raw") {
+        if (defType == "raw" || defType == "font") {
             return ctx.resources.openRawResource(resId).use { it.readBytes() }
         }
         val drawable = ctx.resources.getDrawable(resId, ctx.theme) ?: return null
@@ -262,7 +312,10 @@ class AndroidBitmapImageCodecImpl(
         return if (bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) out.toByteArray() else null
     }
 
-    private fun bitmapToImageBuffer(bitmap: Bitmap): ImageBuffer? {
+    private fun bitmapToImageBuffer(
+        bitmap: Bitmap,
+        premultiplyOutput: Boolean = false
+    ): ImageBuffer? {
         val w = bitmap.width
         val h = bitmap.height
         if (w <= 0 || h <= 0) return null
@@ -279,10 +332,19 @@ class AndroidBitmapImageCodecImpl(
         val rgba = ByteArray(w * h * 4)
         var bi = 0
         for (px in argb) {
-            rgba[bi] = ((px ushr 16) and 0xFF).toByte()
-            rgba[bi + 1] = ((px ushr 8) and 0xFF).toByte()
-            rgba[bi + 2] = (px and 0xFF).toByte()
-            rgba[bi + 3] = ((px ushr 24) and 0xFF).toByte()
+            val a = (px ushr 24) and 0xFF
+            var r = (px ushr 16) and 0xFF
+            var g = (px ushr 8) and 0xFF
+            var b = px and 0xFF
+            if (premultiplyOutput && a < 255) {
+                r = (r * a + 127) / 255
+                g = (g * a + 127) / 255
+                b = (b * a + 127) / 255
+            }
+            rgba[bi] = r.toByte()
+            rgba[bi + 1] = g.toByte()
+            rgba[bi + 2] = b.toByte()
+            rgba[bi + 3] = a.toByte()
             bi += 4
         }
         return ImageBuffer(

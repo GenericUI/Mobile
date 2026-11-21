@@ -42,19 +42,31 @@ class AndroidDatabaseNativeImpl(
     private var openHelper: AndroidSqliteOpenHelper? = null
     private var sqliteDatabase: SQLiteDatabase? = null
     private var sqliteUnavailable: Boolean = false
+    private val verifiedSchemaTables = HashSet<String>()
 
     override suspend fun defineTable(schema: DatabaseTableSchema): Boolean {
         if (isDisposed) return false
         super.defineTable(schema)
         val norm = normalizeTableName(schema.tableName)
+        val colMap = registerSchemaColumns(norm, schema)
         return runOnDatabaseIo {
             synchronized(this) {
                 val db = getOrOpenSqliteDatabase() ?: return@runOnDatabaseIo true
-                for (stmt in DatabaseQuerySqlTranslator.buildCreateTableSql(schema)) {
-                    executePreparedStatement(db, stmt)
+                if (norm !in verifiedSchemaTables) {
+                    for (stmt in DatabaseQuerySqlTranslator.buildCreateTableSql(schema)) {
+                        executePreparedStatement(db, stmt)
+                    }
+                    val existingSanitized = querySqliteTableColumns(db, norm).keys.mapTo(HashSet()) {
+                        DatabaseQuerySqlTranslator.sanitizeIdentifier(it).lowercase()
+                    }
+                    val missingCols = colMap.filterKeys { colName ->
+                        DatabaseQuerySqlTranslator.sanitizeIdentifier(colName).lowercase() !in existingSanitized
+                    }
+                    if (missingCols.isNotEmpty()) {
+                        ensureRecordColumnsExist(db, norm, missingCols)
+                    }
+                    verifiedSchemaTables.add(norm)
                 }
-                val colMap = registerSchemaColumns(norm, schema)
-                ensureRecordColumnsExist(db, norm, colMap)
                 true
             }
         }
@@ -142,6 +154,7 @@ class AndroidDatabaseNativeImpl(
                 val tableIdent = DatabaseQuerySqlTranslator.quoteIdentifier(norm)
                 db.execSQL("DROP TABLE IF EXISTS $tableIdent")
                 knownTableColumns.remove(norm)
+                verifiedSchemaTables.remove(norm)
                 existed || memDropped
             }
         }
@@ -179,6 +192,7 @@ class AndroidDatabaseNativeImpl(
     override fun dispose() {
         synchronized(this) {
             super.dispose()
+            verifiedSchemaTables.clear()
             val helper = openHelper
             openHelper = null
             val db = sqliteDatabase

@@ -8,10 +8,13 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.nexustools.genericui.component.lazy.TreeNode
+import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.mobile.system.MobileLazyViewportPool
 import com.nexustools.genericui.nativeimpl.lazy.TreeViewNativeImpl
+import com.nexustools.genericui.threading.GenericUiThreading
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 /**
@@ -27,6 +30,8 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
     )
 
     val viewportPool: MobileLazyViewportPool = MobileLazyViewportPool()
+    private val viewportLock = Any()
+    private val pendingLogicViewportSync = AtomicBoolean(false)
 
     private var rootNodes: List<TreeNode<*>> = emptyList()
     private val flattenedVisibleRows = mutableListOf<FlattenedTreeRow>()
@@ -45,13 +50,13 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
     var rowHeightPx: Int = 36
 
     val firstVisibleIndex: Int
-        get() = viewportPool.firstVisibleIndex
+        get() = synchronized(viewportLock) { viewportPool.firstVisibleIndex }
 
     val lastVisibleIndex: Int
-        get() = viewportPool.lastVisibleIndex
+        get() = synchronized(viewportLock) { viewportPool.lastVisibleIndex }
 
     val mountedRowIndices: Set<Int>
-        get() = viewportPool.mountedIndices
+        get() = synchronized(viewportLock) { viewportPool.mountedIndices }
 
     override fun createDefaultAndroidView(context: Context): View {
         val leadingSpacer = View(context).also { leadingSpacerView = it }
@@ -97,8 +102,7 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
                         width = (w / density).roundToInt(),
                         height = (h / density).roundToInt()
                     )
-                    recomputeVisibleWindow()
-                    onViewportScrollChangedListener?.invoke(v.scrollY / density, h / density)
+                    dispatchViewportSync(v.scrollY / density, h / density)
                 }
             }
             addView(
@@ -111,6 +115,26 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
         }
     }
 
+    private fun dispatchViewportSync(logicalScroll: Float, logicalExtent: Float) {
+        if (GenericUI.activeFactory != null &&
+            GenericUiThreading.isSplitThreadingEnabled &&
+            !GenericUiThreading.isOnLogicThread()
+        ) {
+            if (pendingLogicViewportSync.compareAndSet(false, true)) {
+                GenericUiThreading.runOnLogic {
+                    pendingLogicViewportSync.set(false)
+                    val latestScroll = nativeWidget.scrollY.coerceAtLeast(0).toFloat()
+                    val latestExtent = nativeWidget.bounds.height.coerceAtLeast(rowHeightPx).toFloat()
+                    recomputeVisibleWindow()
+                    onViewportScrollChangedListener?.invoke(latestScroll, latestExtent)
+                }
+            }
+        } else {
+            recomputeVisibleWindow()
+            onViewportScrollChangedListener?.invoke(logicalScroll, logicalExtent)
+        }
+    }
+
     private fun onNativeScrolled(rawScrollY: Int, rawViewportH: Int) {
         if (isUpdatingFromMetrics) return
         val density = runCatching {
@@ -119,15 +143,16 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
         val logicalScroll = (rawScrollY / density).coerceAtLeast(0f)
         val logicalExtent = (rawViewportH / density).coerceAtLeast(rowHeightPx.toFloat())
         nativeWidget.scrollY = logicalScroll.roundToInt()
-        recomputeVisibleWindow()
-        onViewportScrollChangedListener?.invoke(logicalScroll, logicalExtent)
+        dispatchViewportSync(logicalScroll, logicalExtent)
     }
 
     override fun setRootNodes(roots: List<TreeNode<*>>) {
-        rootNodes = roots
-        rebuildFlattenedRows()
-        viewportPool.clearAll { _, impl ->
-            (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+        synchronized(viewportLock) {
+            rootNodes = roots
+            rebuildFlattenedRows()
+            viewportPool.clearAll { _, impl ->
+                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+            }
         }
         recomputeVisibleWindow()
     }
@@ -154,7 +179,9 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
 
     override fun setEstimatedRowHeight(rowHeightPx: Float, overscanRows: Int) {
         this.rowHeightPx = rowHeightPx.roundToInt().coerceAtLeast(1)
-        viewportPool.overscanItems = overscanRows.coerceAtLeast(0)
+        synchronized(viewportLock) {
+            viewportPool.overscanItems = overscanRows.coerceAtLeast(0)
+        }
     }
 
     override fun setOnViewportScrollChanged(listener: ((scrollOffsetPx: Float, viewportHeightPx: Float) -> Unit)?) {
@@ -212,57 +239,59 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
     }
 
     fun recomputeVisibleWindow() {
-        val totalRows = flattenedVisibleRows.size
-        if (totalRows <= 0) {
-            viewportPool.clearAll { _, impl ->
-                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+        synchronized(viewportLock) {
+            val totalRows = flattenedVisibleRows.size
+            if (totalRows <= 0) {
+                viewportPool.clearAll { _, impl ->
+                    (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+                }
+                return
             }
-            return
+            val viewportHeight = nativeWidget.bounds.height.coerceAtLeast(rowHeightPx).toFloat()
+            val visibleRange = viewportPool.computeVisibleRange(
+                scrollOffsetPx = nativeWidget.scrollY.coerceAtLeast(0).toFloat(),
+                viewportSizePx = viewportHeight,
+                itemExtentPx = rowHeightPx.toFloat(),
+                totalItemCount = totalRows,
+                columns = 1
+            )
+            viewportPool.updateViewportWindow(
+                visibleRange = visibleRange,
+                itemFactory = { idx ->
+                    val entry = flattenedVisibleRows[idx]
+                    AndroidTextImpl("div", "tree-view-row").apply {
+                        setText("  ".repeat(entry.depth) + entry.node.label)
+                        nativeWidget.attributes["data-tree-node-id"] = entry.node.id
+                        nativeWidget.attributes["data-tree-depth"] = entry.depth.toString()
+                        if (entry.node.id == selectedNodeId) {
+                            nativeWidget.classes.add("active")
+                        }
+                        setOnClick {
+                            setSelectedNodeId(entry.node.id)
+                        }
+                        setOnDoubleClick {
+                            onNodeDoubleClickedListener?.invoke(entry.node)
+                        }
+                        setOnContextMenu { ev ->
+                            onNodeContextMenuListener?.invoke(entry.node, ev.x, ev.y)
+                        }
+                    }
+                },
+                onMountItem = { idx, impl ->
+                    val rowView = (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
+                    val entry = flattenedVisibleRows.getOrNull(idx)
+                    if (rowView != null && entry != null) {
+                        attachRowGestureHandlers(rowView, entry.node)
+                    }
+                    (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
+                        nativeWidget.addChild(handle)
+                    }
+                },
+                onUnmountItem = { _, impl ->
+                    (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+                }
+            )
         }
-        val viewportHeight = nativeWidget.bounds.height.coerceAtLeast(rowHeightPx).toFloat()
-        val visibleRange = viewportPool.computeVisibleRange(
-            scrollOffsetPx = nativeWidget.scrollY.coerceAtLeast(0).toFloat(),
-            viewportSizePx = viewportHeight,
-            itemExtentPx = rowHeightPx.toFloat(),
-            totalItemCount = totalRows,
-            columns = 1
-        )
-        viewportPool.updateViewportWindow(
-            visibleRange = visibleRange,
-            itemFactory = { idx ->
-                val entry = flattenedVisibleRows[idx]
-                AndroidTextImpl("div", "tree-view-row").apply {
-                    setText("  ".repeat(entry.depth) + entry.node.label)
-                    nativeWidget.attributes["data-tree-node-id"] = entry.node.id
-                    nativeWidget.attributes["data-tree-depth"] = entry.depth.toString()
-                    if (entry.node.id == selectedNodeId) {
-                        nativeWidget.classes.add("active")
-                    }
-                    setOnClick {
-                        setSelectedNodeId(entry.node.id)
-                    }
-                    setOnDoubleClick {
-                        onNodeDoubleClickedListener?.invoke(entry.node)
-                    }
-                    setOnContextMenu { ev ->
-                        onNodeContextMenuListener?.invoke(entry.node, ev.x, ev.y)
-                    }
-                }
-            },
-            onMountItem = { idx, impl ->
-                val rowView = (impl as? AndroidBaseNativeImpl)?.ensureAndroidView()
-                val entry = flattenedVisibleRows.getOrNull(idx)
-                if (rowView != null && entry != null) {
-                    attachRowGestureHandlers(rowView, entry.node)
-                }
-                (impl.nativeWidget as? AndroidViewHandle)?.let { handle ->
-                    nativeWidget.addChild(handle)
-                }
-            },
-            onUnmountItem = { _, impl ->
-                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
-            }
-        )
     }
 
     private fun attachRowGestureHandlers(rowView: View, node: TreeNode<*>) {
@@ -301,8 +330,10 @@ class AndroidTreeViewImpl : AndroidBaseNativeImpl("androidx.recyclerview.widget.
     }
 
     override fun dispose() {
-        viewportPool.clearAll { _, impl ->
-            (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+        synchronized(viewportLock) {
+            viewportPool.clearAll { _, impl ->
+                (impl.nativeWidget as? AndroidViewHandle)?.removeFromParent()
+            }
         }
         onNodeSelectedListener = null
         onNodeDoubleClickedListener = null

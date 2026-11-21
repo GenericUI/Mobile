@@ -8,9 +8,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.widget.TextView
+import com.nexustools.genericui.component.layout.LayerAlignment
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.*
 import com.nexustools.genericui.enums.css.CssDisplay
+import com.nexustools.genericui.enums.css.CssPointerEvents
 import com.nexustools.genericui.enums.css.CssUnit
 import com.nexustools.genericui.enums.css.CssVisibility
 import com.nexustools.genericui.enums.ui.ThemeMode
@@ -26,7 +28,9 @@ import com.nexustools.genericui.style.color.BootstrapColorPalette
 import com.nexustools.genericui.style.color.RgbaColor
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssAspectRatio
 import com.nexustools.genericui.style.css.CssCursorValue
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
 import com.nexustools.genericui.style.theme.SystemThemeDetector
@@ -67,9 +71,17 @@ open class AndroidBaseNativeImpl(
     protected var explicitGapDp: Int? = null
     protected var baseComponentStyle: ComponentStyle? = null
     protected var baseComputedStyle: ComputedStyle? = null
+    private var lastAppliedBootstrapWidth: BootstrapWidth? = null
+    private var lastAppliedBootstrapHeight: BootstrapHeight? = null
 
     protected open fun allowsSystemAestheticStyles(): Boolean =
-        this is AndroidStyledContainerImpl || this is AndroidStyledButtonImpl
+        this is AndroidStyledContainerImpl ||
+            this is AndroidStyledButtonImpl ||
+            (this is AndroidTextImpl && (
+                nativeWidget.classes.contains("binging-mode-queue-overlay-label") ||
+                    nativeWidget.classes.contains("badge") ||
+                    nativeWidget.classes.contains("player-time-pill")
+                ))
 
     protected open fun allowsSystemTypographyStyles(): Boolean =
         allowsSystemAestheticStyles() || this is AndroidTextImpl || this is AndroidMarkdownViewImpl
@@ -105,7 +117,13 @@ open class AndroidBaseNativeImpl(
     init {
         if (initialView == null) {
             AndroidViewHandle.activeContext?.let { ctx ->
-                nativeWidget.androidView = runCatching { createDefaultAndroidView(ctx) }.getOrNull()
+                if (AndroidViewHandle.isOnMainThread()) {
+                    nativeWidget.androidView = runCatching { createDefaultAndroidView(ctx) }.getOrNull()
+                } else {
+                    AndroidViewHandle.runOnMainThread {
+                        ensureOwnAndroidView(ctx)
+                    }
+                }
             }
         }
         syncNativeBootstrapAppearance()
@@ -120,16 +138,35 @@ open class AndroidBaseNativeImpl(
         }
     }
 
-    internal open fun ensureAndroidView(context: Context? = AndroidViewHandle.activeContext): View? {
-        if (nativeWidget.androidView == null && context != null) {
-            nativeWidget.androidView = runCatching { createDefaultAndroidView(context) }.getOrNull()
-            if (nativeWidget.androidView != null) {
-                syncNativeBootstrapAppearance()
-                syncAndroidView()
+    protected fun ensureOwnAndroidView(context: Context? = AndroidViewHandle.activeContext): View? {
+        if (nativeWidget.androidView == null && context != null && !nativeWidget.disposed) {
+            if (AndroidViewHandle.isOnMainThread()) {
+                if (nativeWidget.androidView == null && !nativeWidget.disposed) {
+                    nativeWidget.androidView = runCatching { createDefaultAndroidView(context) }.getOrNull()
+                    if (nativeWidget.androidView != null) {
+                        syncNativeBootstrapAppearance()
+                        syncAndroidView()
+                        nativeWidget.parentHandle?.attachChildHandleOnMainThread(nativeWidget)
+                    }
+                }
+            } else {
+                AndroidViewHandle.runOnMainThread {
+                    if (nativeWidget.androidView == null && !nativeWidget.disposed) {
+                        nativeWidget.androidView = runCatching { createDefaultAndroidView(context) }.getOrNull()
+                        if (nativeWidget.androidView != null) {
+                            syncNativeBootstrapAppearance()
+                            syncAndroidView()
+                            nativeWidget.parentHandle?.attachChildHandleOnMainThread(nativeWidget)
+                        }
+                    }
+                }
             }
         }
         return nativeWidget.androidView
     }
+
+    internal open fun ensureAndroidView(context: Context? = AndroidViewHandle.activeContext): View? =
+        ensureOwnAndroidView(context)
 
     override fun setClass(className: String) {
         val tokens = className.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet()
@@ -227,28 +264,44 @@ open class AndroidBaseNativeImpl(
             BootstrapWidth.W_100, BootstrapWidth.VW_100, BootstrapWidth.MIN_VW_100 -> {
                 nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
                 nativeWidget.fillMaxWidth = true
+                lastAppliedBootstrapWidth = w
             }
             BootstrapWidth.W_25, BootstrapWidth.W_50, BootstrapWidth.W_75 -> {
                 nativeWidget.attributes["layoutWidth"] = "${((w.fraction ?: 1f) * 100f).roundToInt()}%"
+                lastAppliedBootstrapWidth = w
             }
             BootstrapWidth.W_AUTO, BootstrapWidth.MW_100 -> {
                 nativeWidget.attributes["layoutWidth"] = "WRAP_CONTENT"
+                lastAppliedBootstrapWidth = w
             }
-            null -> nativeWidget.attributes.remove("layoutWidth")
+            null -> {
+                if (lastAppliedBootstrapWidth != null) {
+                    nativeWidget.attributes.remove("layoutWidth")
+                    lastAppliedBootstrapWidth = null
+                }
+            }
         }
 
         when (val h = styleSnapshot.height) {
             BootstrapHeight.H_100, BootstrapHeight.VH_100, BootstrapHeight.MIN_VH_100 -> {
                 nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
                 nativeWidget.fillMaxHeight = true
+                lastAppliedBootstrapHeight = h
             }
             BootstrapHeight.H_25, BootstrapHeight.H_50, BootstrapHeight.H_75 -> {
                 nativeWidget.attributes["layoutHeight"] = "${((h.fraction ?: 1f) * 100f).roundToInt()}%"
+                lastAppliedBootstrapHeight = h
             }
             BootstrapHeight.H_AUTO, BootstrapHeight.MH_100 -> {
                 nativeWidget.attributes["layoutHeight"] = "WRAP_CONTENT"
+                lastAppliedBootstrapHeight = h
             }
-            null -> nativeWidget.attributes.remove("layoutHeight")
+            null -> {
+                if (lastAppliedBootstrapHeight != null) {
+                    nativeWidget.attributes.remove("layoutHeight")
+                    lastAppliedBootstrapHeight = null
+                }
+            }
         }
 
         styleSnapshot.opacity?.let { op ->
@@ -356,34 +409,150 @@ open class AndroidBaseNativeImpl(
         runCatching {
             val weightAttr = nativeWidget.attributes["data-stack-weight"]
                 ?: nativeWidget.attributes["layoutWeight"]
+            val explicitWeight = baseComponentStyle?.getFlexGrow() ?: baseComputedStyle?.flexGrow
             nativeWidget.layoutWeight = weightAttr?.toFloatOrNull()
+                ?: explicitWeight
                 ?: if (nativeWidget.classes.contains("flex-grow-1") || styleSnapshot.flexGrow == BootstrapFlexGrow.GROW_1) 1f else 0f
+
+            val wCss = baseComponentStyle?.getWidth() ?: CssLength.parse(baseComputedStyle?.width)
+            val hCss = baseComponentStyle?.getHeight() ?: CssLength.parse(baseComputedStyle?.height)
 
             nativeWidget.fillMaxWidth =
                 nativeWidget.attributes["layoutWidth"] == "MATCH_PARENT" ||
                     nativeWidget.classes.contains("w-100") ||
                     styleSnapshot.width == BootstrapWidth.W_100 ||
                     styleSnapshot.width == BootstrapWidth.VW_100 ||
-                    styleSnapshot.width == BootstrapWidth.MIN_VW_100
+                    styleSnapshot.width == BootstrapWidth.MIN_VW_100 ||
+                    (wCss?.unit == CssUnit.PERCENT && wCss.value >= 100f)
 
             nativeWidget.fillMaxHeight =
                 nativeWidget.attributes["layoutHeight"] == "MATCH_PARENT" ||
                     nativeWidget.classes.contains("h-100") ||
                     styleSnapshot.height == BootstrapHeight.H_100 ||
                     styleSnapshot.height == BootstrapHeight.VH_100 ||
-                    styleSnapshot.height == BootstrapHeight.MIN_VH_100
+                    styleSnapshot.height == BootstrapHeight.MIN_VH_100 ||
+                    (hCss?.unit == CssUnit.PERCENT && hCss.value >= 100f)
 
-            val resolvedFlexDir = styleSnapshot.flexDirection ?: when {
-                nativeWidget.classes.contains("flex-row") || componentClassPrefix == "hstack" -> FlexDirection.ROW
-                else -> FlexDirection.COLUMN
+            nativeWidget.widthPercent = when {
+                wCss?.unit == CssUnit.PERCENT && wCss.value > 0f && wCss.value < 100f -> wCss.value
+                styleSnapshot.width?.fraction != null && (styleSnapshot.width?.fraction ?: 1f) < 1f ->
+                    styleSnapshot.width!!.fraction!! * 100f
+                else -> nativeWidget.attributes["layoutWidth"]?.takeIf { it.endsWith("%") }
+                    ?.removeSuffix("%")?.toFloatOrNull()?.takeIf { it > 0f && it < 100f }
             }
+            nativeWidget.heightPercent = when {
+                hCss?.unit == CssUnit.PERCENT && hCss.value > 0f && hCss.value < 100f -> hCss.value
+                styleSnapshot.height?.fraction != null && (styleSnapshot.height?.fraction ?: 1f) < 1f ->
+                    styleSnapshot.height!!.fraction!! * 100f
+                else -> nativeWidget.attributes["layoutHeight"]?.takeIf { it.endsWith("%") }
+                    ?.removeSuffix("%")?.toFloatOrNull()?.takeIf { it > 0f && it < 100f }
+            }
+
+            val attrAspect = CssAspectRatio.parse(nativeWidget.attributes["aspectRatio"])?.numericRatio
+            val bsAspect = nativeWidget.attributes["data-bs-aspect-ratio"]?.trim()?.let { raw ->
+                when {
+                    raw.endsWith("%") -> raw.removeSuffix("%").toFloatOrNull()?.takeIf { it > 0f }?.let { 100f / it }
+                    raw.contains("/") -> CssAspectRatio.parse(raw)?.numericRatio
+                    raw.contains(":") -> {
+                        val parts = raw.split(":")
+                        if (parts.size == 2) {
+                            val w = parts[0].trim().toFloatOrNull()
+                            val h = parts[1].trim().toFloatOrNull()
+                            if (w != null && h != null && h > 0f) w / h else null
+                        } else null
+                    }
+                    else -> raw.toFloatOrNull()?.takeIf { it > 0f }
+                }
+            }
+            val classAspect = when {
+                nativeWidget.classes.contains("ratio-16x9") -> 16f / 9f
+                nativeWidget.classes.contains("ratio-4x3") -> 4f / 3f
+                nativeWidget.classes.contains("ratio-1x1") -> 1f
+                nativeWidget.classes.contains("ratio-21x9") -> 21f / 9f
+                else -> null
+            }
+            val tagAttr = nativeWidget.attributes["data-genericui-tag"]
+            val isRatioCls = componentClassPrefix == "ratio" ||
+                nativeWidget.classes.contains("ratio") ||
+                tagAttr == "genericui:aspectratiocontainer"
+            nativeWidget.isRatioContainer = isRatioCls
+            nativeWidget.aspectRatio = baseComponentStyle?.getAspectRatio()?.numericRatio
+                ?: baseComputedStyle?.aspectRatio
+                ?: styleSnapshot.aspectRatio?.numericRatio
+                ?: attrAspect
+                ?: bsAspect
+                ?: classAspect
+                ?: if (isRatioCls) 1f else 0f
+
+            nativeWidget.isLayeredContainer = isRatioCls ||
+                componentClassPrefix == "gui-layered-container" ||
+                componentClassPrefix == "gui-overlay-host" ||
+                componentClassPrefix == "gui-overlay-host-root" ||
+                componentClassPrefix == "gui-overlay" ||
+                nativeWidget.classes.contains("gui-layered-container") ||
+                nativeWidget.classes.contains("gui-overlay-host") ||
+                nativeWidget.classes.contains("gui-overlay-host-root") ||
+                nativeWidget.classes.contains("gui-overlay") ||
+                tagAttr == "genericui:layered-container" ||
+                tagAttr == "genericui:overlay-host" ||
+                tagAttr == "genericui:overlay-host-root" ||
+                tagAttr == "genericui:overlay"
+
+            val sizingAttr = nativeWidget.attributes["layerSizingMode"]?.trim()?.uppercase()
+            val hasLayerFillClass = nativeWidget.classes.contains("gui-layer-fill")
+            val hasLayerFloatClass = nativeWidget.classes.contains("gui-layer-float")
+            nativeWidget.isLayerItem = nativeWidget.classes.contains("gui-layer-item") || sizingAttr != null
+            nativeWidget.layerFloat = hasLayerFloatClass || sizingAttr == "FLOAT"
+            nativeWidget.layerFill = !nativeWidget.layerFloat && (hasLayerFillClass || sizingAttr == "FILL")
+
+            val alignAttr = nativeWidget.attributes["layerAlignment"]?.trim()?.uppercase()
+            nativeWidget.layerAlignment = alignAttr?.let { raw ->
+                LayerAlignment.entries.firstOrNull { it.name == raw }
+            } ?: LayerAlignment.TOP_START
+            nativeWidget.layerOffsetXPx = nativeWidget.attributes["layerOffsetXPx"]?.toIntOrNull() ?: 0
+            nativeWidget.layerOffsetYPx = nativeWidget.attributes["layerOffsetYPx"]?.toIntOrNull() ?: 0
+            nativeWidget.layerLeftPercent = nativeWidget.attributes["layerLeftPercent"]?.takeIf { it.isNotBlank() }?.toFloatOrNull()
+            nativeWidget.layerTopPercent = nativeWidget.attributes["layerTopPercent"]?.takeIf { it.isNotBlank() }?.toFloatOrNull()
+            nativeWidget.layerRightPx = nativeWidget.attributes["layerRightPx"]?.takeIf { it.isNotBlank() }?.toIntOrNull()
+            nativeWidget.layerBottomPx = nativeWidget.attributes["layerBottomPx"]?.takeIf { it.isNotBlank() }?.toIntOrNull()
+            nativeWidget.layerZIndex = baseComponentStyle?.getZIndex()
+                ?: baseComputedStyle?.zIndex
+                ?: nativeWidget.attributes["layerZIndex"]?.toIntOrNull()
+                ?: 0
+            nativeWidget.layerPassThrough =
+                nativeWidget.attributes["layerPassThrough"]?.equals("true", ignoreCase = true) == true ||
+                    nativeWidget.classes.contains("gui-layer-pass-through") ||
+                    styleSnapshot.pointerEvents == BootstrapPointerEvents.NONE ||
+                    baseComponentStyle?.getPointerEvents() == CssPointerEvents.NONE ||
+                    baseComputedStyle?.pointerEventsEnabled == false
+
+            val resolvedFlexDir = baseComponentStyle?.getFlexDirection()
+                ?: styleSnapshot.flexDirection
+                ?: baseComputedStyle?.flexDirection
+                ?: when {
+                    nativeWidget.classes.contains("flex-row") || componentClassPrefix == "hstack" -> FlexDirection.ROW
+                    else -> FlexDirection.COLUMN
+                }
             nativeWidget.flexDirection = resolvedFlexDir
-            nativeWidget.flexWrap = styleSnapshot.flexWrap ?: if (nativeWidget.classes.contains("flex-wrap")) FlexWrap.WRAP else FlexWrap.NOWRAP
-            nativeWidget.alignItems = styleSnapshot.alignItems ?: AlignItems.STRETCH
-            nativeWidget.justifyContent = styleSnapshot.justifyContent ?: JustifyContent.START
+            nativeWidget.flexWrap = baseComponentStyle?.getFlexWrap()
+                ?: styleSnapshot.flexWrap
+                ?: baseComputedStyle?.flexWrap
+                ?: if (nativeWidget.classes.contains("flex-wrap")) FlexWrap.WRAP else FlexWrap.NOWRAP
+            nativeWidget.alignItems = baseComponentStyle?.getAlignItems()
+                ?: styleSnapshot.alignItems
+                ?: baseComputedStyle?.alignItems
+                ?: AlignItems.STRETCH
+            nativeWidget.justifyContent = baseComponentStyle?.getJustifyContent()
+                ?: styleSnapshot.justifyContent
+                ?: baseComputedStyle?.justifyContent
+                ?: JustifyContent.START
 
             val gapScaleDp = spacingScaleToPx(styleSnapshot.gap)
-            val gapDp = explicitGapDp ?: gapScaleDp ?: 0
+            val gapDp = explicitGapDp
+                ?: baseComponentStyle?.getGap()?.resolvePx()?.roundToInt()
+                ?: baseComputedStyle?.gap?.resolvePx()?.roundToInt()
+                ?: gapScaleDp
+                ?: 0
             nativeWidget.gapPx = AndroidViewHandle.dpToPx(gapDp)
 
             AndroidViewHandle.runOnMainThread {
@@ -402,6 +571,14 @@ open class AndroidBaseNativeImpl(
                     view.isEnabled = nativeWidget.enabled
                     view.alpha = nativeWidget.alpha
 
+                    val selfFlex = (nativeWidget.childHostViewGroup ?: view) as? AndroidFlexContainerView
+                    if (selfFlex != null) {
+                        selfFlex.aspectRatio = nativeWidget.aspectRatio
+                        selfFlex.isLayered = nativeWidget.isLayeredContainer
+                        selfFlex.isRatioContainer = nativeWidget.isRatioContainer
+                        selfFlex.pointerEventsNone = nativeWidget.layerPassThrough
+                    }
+
                     val effPad = resolveDefaultPaddingPx()
                     val padTarget = nativeWidget.childHostViewGroup ?: view
                     padTarget.setPadding(effPad.left, effPad.top, effPad.right, effPad.bottom)
@@ -410,9 +587,26 @@ open class AndroidBaseNativeImpl(
                         applyBaseSurfaceDrawable(view)
                     }
 
-                    if (onClickListener != null) {
+                    if (nativeWidget.layerPassThrough) {
+                        view.setOnClickListener(null)
+                        view.isClickable = false
+                        view.isLongClickable = false
+                    } else if (onClickListener != null) {
                         view.isClickable = true
                         view.setOnClickListener { dispatchClick() }
+                    } else if (this !is AndroidButtonImpl &&
+                        this !is AndroidCheckboxImpl &&
+                        this !is AndroidSelectImpl &&
+                        this !is AndroidRangeSliderImpl &&
+                        this !is AndroidTextInputImpl &&
+                        this !is AndroidDropdownImpl
+                    ) {
+                        view.setOnClickListener(null)
+                        view.isClickable = false
+                    }
+
+                    if (nativeWidget.isLayerItem || nativeWidget.layerZIndex != 0 || view.translationZ != 0f) {
+                        view.translationZ = nativeWidget.layerZIndex.toFloat()
                     }
 
                     val parentVg = view.parent
@@ -600,27 +794,37 @@ open class AndroidBaseNativeImpl(
         val wLen = filtered.getWidth()
         val hLen = filtered.getHeight()
         if (wLen != null || hLen != null) {
-            if (wLen?.unit == CssUnit.PERCENT && wLen.value == 100f) {
-                nativeWidget.attributes["layoutWidth"] = "MATCH_PARENT"
+            if (wLen?.unit == CssUnit.PERCENT && wLen.value >= 100f) {
                 nativeWidget.fillMaxWidth = true
+            } else if (wLen?.isAuto == true) {
+                nativeWidget.hasExplicitPreferredWidth = preferredSizeValue?.let { it.width > 0 } == true
             }
-            if (hLen?.unit == CssUnit.PERCENT && hLen.value == 100f) {
-                nativeWidget.attributes["layoutHeight"] = "MATCH_PARENT"
+            if (hLen?.unit == CssUnit.PERCENT && hLen.value >= 100f) {
                 nativeWidget.fillMaxHeight = true
+            } else if (hLen?.isAuto == true) {
+                nativeWidget.hasExplicitPreferredHeight = preferredSizeValue?.let { it.height > 0 } == true
+                if (styleSnapshot.height == null) {
+                    nativeWidget.fillMaxHeight = false
+                }
             }
-            val wPx = wLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
-                ?: preferredSizeValue?.width
-                ?: nativeWidget.bounds.width
-            val hPx = hLen?.takeIf { it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
-                ?: preferredSizeValue?.height
-                ?: nativeWidget.bounds.height
-            if (wLen != null && wLen.unit != CssUnit.PERCENT && wPx > 0) {
+            val explicitWPx = wLen?.takeIf { !it.isAuto && !it.isNone && it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+            val explicitHPx = hLen?.takeIf { !it.isAuto && !it.isNone && it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+            if (explicitWPx != null && explicitWPx > 0) {
                 nativeWidget.hasExplicitPreferredWidth = true
             }
-            if (hLen != null && hLen.unit != CssUnit.PERCENT && hPx > 0) {
+            if (explicitHPx != null && explicitHPx > 0) {
                 nativeWidget.hasExplicitPreferredHeight = true
             }
-            nativeWidget.bounds = Rect(nativeWidget.bounds.x, nativeWidget.bounds.y, wPx, hPx)
+            val nextW = explicitWPx ?: preferredSizeValue?.width
+            val nextH = explicitHPx ?: preferredSizeValue?.height
+            if (nextW != null || nextH != null) {
+                nativeWidget.bounds = Rect(
+                    nativeWidget.bounds.x,
+                    nativeWidget.bounds.y,
+                    nextW ?: nativeWidget.bounds.width,
+                    nextH ?: nativeWidget.bounds.height
+                )
+            }
         }
 
         filtered.getPadding()?.let { setPadding(it.toEdgeInsets()) }
@@ -648,13 +852,11 @@ open class AndroidBaseNativeImpl(
             setVisible(false)
         }
         filtered.getFlexGrow()?.let { nativeWidget.attributes["layoutWeight"] = it.toString() }
-            ?: nativeWidget.attributes.remove("layoutWeight")
         filtered.getFlexShrink()?.let { nativeWidget.attributes["flexShrink"] = it.toString() }
             ?: nativeWidget.attributes.remove("flexShrink")
         filtered.getFlexBasis()?.let { nativeWidget.attributes["flexBasis"] = it.toCssString() }
             ?: nativeWidget.attributes.remove("flexBasis")
         filtered.getAspectRatio()?.let { nativeWidget.attributes["aspectRatio"] = it.toCssString() }
-            ?: nativeWidget.attributes.remove("aspectRatio")
         syncNativeBootstrapAppearance()
     }
 
@@ -880,6 +1082,59 @@ open class AndroidBaseNativeImpl(
         customStyleFontSizePx = if (allowTypography) filtered.fontSizePx else null
         customStyleFontWeightNumeric = if (allowTypography) filtered.fontWeightNumeric else null
         filtered.opacity.let { setOpacity(it) }
+
+        filtered.flexDirection?.let { styleSnapshot = styleSnapshot.copy(flexDirection = it) }
+        filtered.flexWrap?.let { styleSnapshot = styleSnapshot.copy(flexWrap = it) }
+        filtered.alignItems?.let { styleSnapshot = styleSnapshot.copy(alignItems = it) }
+        filtered.justifyContent?.let { styleSnapshot = styleSnapshot.copy(justifyContent = it) }
+        filtered.gap?.resolvePx()?.roundToInt()?.let { explicitGapDp = it }
+
+        val wLen = CssLength.parse(filtered.width)
+        val hLen = CssLength.parse(filtered.height)
+        if (wLen != null || hLen != null) {
+            if (wLen?.unit == CssUnit.PERCENT && wLen.value >= 100f) {
+                nativeWidget.fillMaxWidth = true
+            } else if (wLen?.isAuto == true) {
+                nativeWidget.hasExplicitPreferredWidth = preferredSizeValue?.let { it.width > 0 } == true
+            }
+            if (hLen?.unit == CssUnit.PERCENT && hLen.value >= 100f) {
+                nativeWidget.fillMaxHeight = true
+            } else if (hLen?.isAuto == true) {
+                nativeWidget.hasExplicitPreferredHeight = preferredSizeValue?.let { it.height > 0 } == true
+                if (styleSnapshot.height == null && baseComponentStyle?.getHeight() == null) {
+                    nativeWidget.fillMaxHeight = false
+                }
+            }
+            val explicitWPx = wLen?.takeIf { !it.isAuto && !it.isNone && it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+            val explicitHPx = hLen?.takeIf { !it.isAuto && !it.isNone && it.unit != CssUnit.PERCENT }?.resolvePx()?.roundToInt()
+            if (explicitWPx != null && explicitWPx > 0) {
+                nativeWidget.hasExplicitPreferredWidth = true
+            }
+            if (explicitHPx != null && explicitHPx > 0) {
+                nativeWidget.hasExplicitPreferredHeight = true
+            }
+            val nextW = explicitWPx ?: preferredSizeValue?.width
+            val nextH = explicitHPx ?: preferredSizeValue?.height
+            if (nextW != null || nextH != null) {
+                nativeWidget.bounds = Rect(
+                    nativeWidget.bounds.x,
+                    nativeWidget.bounds.y,
+                    nextW ?: nativeWidget.bounds.width,
+                    nextH ?: nativeWidget.bounds.height
+                )
+            }
+        }
+
+        filtered.padding?.let { setPadding(it.toEdgeInsets()) }
+        filtered.margin?.let { setMargin(it.toEdgeInsets()) }
+        if (filtered.display.equals("none", ignoreCase = true)) {
+            setVisible(false)
+        }
+        filtered.flexGrow?.let { nativeWidget.attributes["layoutWeight"] = it.toString() }
+        filtered.flexShrink?.let { nativeWidget.attributes["flexShrink"] = it.toString() }
+        filtered.flexBasis?.let { nativeWidget.attributes["flexBasis"] = it.toCssString() }
+        filtered.aspectRatio?.let { nativeWidget.attributes["aspectRatio"] = it.toString() }
+
         syncNativeBootstrapAppearance()
     }
 
@@ -902,30 +1157,42 @@ open class AndroidBaseNativeImpl(
             onComplete()
             return true
         }
-        runCatching {
-            val anim = view.animate()
-                .setDuration(spec.durationMs.toLong())
-                .setStartDelay(spec.delayMs.toLong())
-                .setInterpolator(
-                    PathInterpolator(
-                        spec.timingFunction.x1,
-                        spec.timingFunction.y1,
-                        spec.timingFunction.x2,
-                        spec.timingFunction.y2
-                    )
-                )
-                .withEndAction { onComplete() }
-            when (property) {
-                "opacity" -> toValue.toFloatOrNull()?.let { anim.alpha(it) }
-                "transform" -> {
-                    val tf = CssTransform2D.parse(toValue)
-                    val (dx, dy) = tf.resolveTranslationPx(view.width, view.height)
-                    anim.translationX(dx).translationY(dy).scaleX(tf.scaleX).scaleY(tf.scaleY).rotation(tf.rotateDeg)
-                }
+        val dispatchCompletion: () -> Unit = {
+            if (com.nexustools.genericui.core.GenericUI.activeFactory != null &&
+                com.nexustools.genericui.threading.GenericUiThreading.isSplitThreadingEnabled &&
+                !com.nexustools.genericui.threading.GenericUiThreading.isOnLogicThread()
+            ) {
+                com.nexustools.genericui.threading.GenericUiThreading.runOnLogic(onComplete)
+            } else {
+                onComplete()
             }
-            anim.start()
-        }.onFailure {
-            onComplete()
+        }
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val anim = view.animate()
+                    .setDuration(spec.durationMs.toLong())
+                    .setStartDelay(spec.delayMs.toLong())
+                    .setInterpolator(
+                        PathInterpolator(
+                            spec.timingFunction.x1,
+                            spec.timingFunction.y1,
+                            spec.timingFunction.x2,
+                            spec.timingFunction.y2
+                        )
+                    )
+                    .withEndAction { dispatchCompletion() }
+                when (property) {
+                    "opacity" -> toValue.toFloatOrNull()?.let { anim.alpha(it) }
+                    "transform" -> {
+                        val tf = CssTransform2D.parse(toValue)
+                        val (dx, dy) = tf.resolveTranslationPx(view.width, view.height)
+                        anim.translationX(dx).translationY(dy).scaleX(tf.scaleX).scaleY(tf.scaleY).rotation(tf.rotateDeg)
+                    }
+                }
+                anim.start()
+            }.onFailure {
+                dispatchCompletion()
+            }
         }
         return true
     }
@@ -943,9 +1210,26 @@ open class AndroidBaseNativeImpl(
         onClickListener = listener
         AndroidViewHandle.runOnMainThread {
             runCatching {
-                nativeWidget.androidView?.setOnClickListener(
-                    if (listener != null) View.OnClickListener { dispatchClick() } else null
-                )
+                val view = nativeWidget.androidView ?: return@runCatching
+                if (nativeWidget.layerPassThrough) {
+                    view.setOnClickListener(null)
+                    view.isClickable = false
+                    view.isLongClickable = false
+                } else if (listener != null) {
+                    view.isClickable = true
+                    view.setOnClickListener { dispatchClick() }
+                } else {
+                    view.setOnClickListener(null)
+                    if (this !is AndroidButtonImpl &&
+                        this !is AndroidCheckboxImpl &&
+                        this !is AndroidSelectImpl &&
+                        this !is AndroidRangeSliderImpl &&
+                        this !is AndroidTextInputImpl &&
+                        this !is AndroidDropdownImpl
+                    ) {
+                        view.isClickable = false
+                    }
+                }
             }
         }
     }
@@ -1118,6 +1402,6 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun dispose() {
-        nativeWidget.removeFromParent()
+        nativeWidget.dispose()
     }
 }

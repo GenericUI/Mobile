@@ -1,5 +1,8 @@
 package com.nexustools.genericui.android
 
+import android.content.Context
+import android.view.View
+import android.view.ViewGroup
 import com.nexustools.genericui.core.AbstractContainer
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.window.DisplayCutoutMode
@@ -7,12 +10,10 @@ import com.nexustools.genericui.enums.window.WindowState
 import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.mobile.layout.MobileSafeAreaTracker
-import com.nexustools.genericui.mobile.system.MobilePipController
 import com.nexustools.genericui.nativeimpl.layout.DividerNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.MenuItemNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.WindowNativeImpl
-import com.nexustools.genericui.window.PipConfig
 import com.nexustools.genericui.window.TitleBar
 import com.nexustools.genericui.window.TitleCapabilities
 import com.nexustools.genericui.window.WindowAspectRatioHelper
@@ -61,7 +62,6 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
     )
 
     val safeAreaTracker: MobileSafeAreaTracker = MobileSafeAreaTracker()
-    val pipController: MobilePipController = MobilePipController()
 
     private var titleText: String = "GenericUI"
     private var windowSize: Size = Size(412, 915)
@@ -95,11 +95,42 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
     private var onResizeListener: ((WindowConfiguration) -> Unit)? = null
     private var onFocusListener: ((Boolean) -> Unit)? = null
     private var onCloseRequestedListener: (() -> Boolean)? = null
+    internal var onChromeMutated: (() -> Unit)? = null
+
+    override fun ensureAndroidView(context: Context?): View? {
+        val view = ensureOwnAndroidView(context)
+        val vg = (nativeWidget.childHostViewGroup ?: (view as? ViewGroup))
+        if (vg != null && context != null) {
+            runCatching {
+                for (childImpl in childNativeImpls.toList()) {
+                    val childView = (childImpl as? AndroidBaseNativeImpl)?.ensureAndroidView(context)
+                    val childHandle = childImpl.nativeWidget as? AndroidViewHandle
+                    val parentView = childView?.parent as? View
+                    val isHostedInActivity = parentView?.getTag(GenericUiFragmentActivity.TAG_ACTIVITY_CONTENT_HOST) == true
+                    if (childView != null && childHandle != null && !isHostedInActivity && childView.parent !== vg) {
+                        (childView.parent as? ViewGroup)?.removeView(childView)
+                        val lp = if (vg is AndroidFlexContainerView) {
+                            AndroidFlexContainerView.buildLayoutParamsFor(childHandle)
+                        } else {
+                            ViewGroup.MarginLayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            )
+                        }
+                        vg.addView(childView, lp)
+                    }
+                }
+            }
+        }
+        syncAndroidView()
+        return view
+    }
 
     override fun setTitle(title: String) {
         titleText = title
         AndroidFileBrowserDialogImpl.activeHostActivity?.title = title
         rebuildMobileMenuBarNavbar()
+        onChromeMutated?.invoke()
     }
 
     override fun getTitle(): String = titleText
@@ -132,7 +163,14 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
         val resolved = clampSizeForCurrentState(size)
         windowSize = resolved
         nativeWidget.bounds = Rect(0, 0, resolved.width, resolved.height)
-        onResizeListener?.invoke(WindowConfiguration(widthPx = resolved.width, heightPx = resolved.height))
+        onResizeListener?.invoke(
+            WindowConfiguration(
+                widthPx = resolved.width,
+                heightPx = resolved.height,
+                windowState = windowState,
+                isFullscreen = fullscreenFlag
+            )
+        )
     }
 
     override fun getWindowSize(): Size = windowSize
@@ -234,6 +272,7 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
             }
         }
         rebuildMobileMenuBarNavbar()
+        onChromeMutated?.invoke()
     }
 
     override fun isFullscreen(): Boolean = fullscreenFlag
@@ -246,6 +285,7 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
             nativeWidget.attributes.remove("fullscreenElement")
         }
         setFullscreen(elementImpl != null, cutoutMode)
+        onChromeMutated?.invoke()
     }
 
     override fun getFullscreenElement(): NativeImpl<*>? = fullscreenElementImpl
@@ -257,6 +297,7 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
         titleBarInstructions = titleBar
         titleBar?.setHostEmbedsComponents(true)
         rebuildMobileMenuBarNavbar()
+        onChromeMutated?.invoke()
     }
 
     fun getTitleBarInstructions(): TitleBar? = titleBarInstructions
@@ -266,8 +307,10 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
         this.menuBarImpl = menuBarImpl
         (menuBarImpl as? AndroidMenuBarImpl)?.onStructureChanged = {
             rebuildMobileMenuBarNavbar()
+            onChromeMutated?.invoke()
         }
         rebuildMobileMenuBarNavbar()
+        onChromeMutated?.invoke()
     }
 
     override fun setNavBarNative(navBarImpl: NativeImpl<*>?) {
@@ -281,12 +324,14 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
             addChildNative(navBarImpl, 0)
         }
         rebuildMobileMenuBarNavbar()
+        onChromeMutated?.invoke()
     }
 
     override fun setBottomNavigationBarNative(bottomNavImpl: NativeImpl<*>?) {
         this.bottomNavImpl?.let { removeChildNative(it) }
         this.bottomNavImpl = bottomNavImpl
         if (bottomNavImpl != null) addChildNative(bottomNavImpl, -1)
+        onChromeMutated?.invoke()
     }
 
     fun rebuildMobileMenuBarNavbar() {
@@ -453,22 +498,6 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
             }
         }
     }
-
-    override fun enterPictureInPicture(config: PipConfig): Boolean {
-        pipController.configure(config)
-        val activity = AndroidFileBrowserDialogImpl.activeHostActivity as? GenericUiFragmentActivity
-        if (activity != null) {
-            return activity.enterFragmentPictureInPicture(config)
-        }
-        pipController.onPictureInPictureModeChanged(true)
-        return true
-    }
-
-    override fun exitPictureInPicture() {
-        pipController.onPictureInPictureModeChanged(false)
-    }
-
-    override fun isInPictureInPicture(): Boolean = pipController.isInPictureInPictureMode
 
     override fun showWindow() {
         setVisible(true)

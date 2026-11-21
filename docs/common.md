@@ -1,20 +1,16 @@
-# `:mobile:common` — Cross-Mobile Infrastructure (`commonMain`)
+# `:mobile` Common Layer (`commonMain` / `mobileCommon`)
+
+> **Module Guide**: [**`:mobile` (`../README.md`)**](../README.md) | **Related**: [`shared.md`](shared.md) · [`android.md`](android.md) · [`ios.md`](ios.md) · [`../../docs/ipados.md`](../../docs/ipados.md)
 
 ## Overview
-`:mobile:common` provides the common mobile widget hierarchy (`MobileBaseNativeImpl`), `ComponentStyle` and `ComponentBootstrap` execution, strict user CSS class isolation (`customClasses`), semantic `BootstrapType` tinting, virtualized list/grid viewport engine, window/navbar state management, and system service abstractions used by `:mobile:android` and `:mobile:ios`. It depends on `:common` and `:systemCommon`.
+The `commonMain` source set of `:mobile` (`mobileCommon` variant scope) hosts pure-Kotlin mobile posture, adaptive breakpoint, gesture/fling physics, lifecycle, document-picker bridge, and lazy viewport pooling helpers shared across **`Android`**, **`IOS`**, and **`IPadOS`**, sitting directly above `:common` and `:system`.
 
 ---
 
-## Key Components
+## Key Classes in `mobile/src/commonMain`
 
-- **Widget, Styling, & Container Base (`com.nexustools.genericui.mobile`)**:
-  - `MobileBaseNativeImpl` (`BootstrapType.NONE` default unmodified native controls, `BootstrapType != NONE` native control tinting via `ThemeConfig`, strict `customClasses` isolation, typography styles honored on text elements, aesthetic `ComponentStyle` overrides silently ignored on standard controls/containers and honored on `StyledContainer` / `StyledButton`)
-  - `MobileBaseContainerNativeImpl`, `MobileNativeWidget`
-  - `MobileWindowNativeImpl`, `MobileApplicationNativeImpl` (`IApplication.addStyleSheet` / `removeStyleSheet`, `ThemeMode.AUTO` / `DARK` / `LIGHT`, `ThemeConfig`)
-- **Virtualized Containers (`com.nexustools.genericui.mobile.container`)**:
-  - `MobileLazyViewportEngine`
-  - `MobileLazyListNativeImpl`, `MobileLazyGridNativeImpl`, `MobileTreeViewNativeImpl`
-- **Dialogs, Timers, & System Services**:
-  - `MobileFileBrowserHelper`, `MobileFileBrowserDialogNativeImpl`, `MobileStandardDialogsNativeImpl`
-  - `MobileUiTimerNativeImpl`
-  - `MobileNetworkMonitorNativeImpl`, `MobileNotificationManagerNativeImpl`, `MobilePermissionManagerNativeImpl`, `MobileUserDirectoryNativeImpl`
+| Domain | Classes | Package | Responsibility |
+|-------|---------|---------|----------------|
+| **Adaptive Layout & Posture** | `MobileDeviceFormFactor`<br/>`MobileAdaptiveFragmentCoordinator`<br/>`MobileLayoutFactory`<br/>`MobileOrientationPosture`<br/>`MobileSafeAreaTracker` | `com.nexustools.genericui.mobile.layout` | Distinguishes phone vs. tablet smallest-width breakpoints (`600dp`), Split View / Slide Over compact widths, foldable posture/hinge regions, orientation, and safe-area edge insets across Android, iOS, and iPadOS |
+| **Touch Gestures, Fling, & Haptics** | `MobileGestureRecognizer`<br/>`MobileGestureType`<br/>`MobileFlingPhysics`<br/>`MobileHapticFeedbackType` | `com.nexustools.genericui.mobile.gesture` | Recognizes tap, long-press, pan, swipe, and pinch gestures; computes deceleration fling curves; exposes cross-mobile haptic feedback descriptors |
+| **Lifecycle, Pickers, & Viewport Pool** | `MobileLifecycleBridge`<br/>`MobileLifecycleState`<br/>`MobileDocumentPickerBridge`<br/>`MobileLazyViewportPool` | `com.nexustools.genericui.mobile.system` | Bridges foreground/background mobile lifecycle states, document picker specifications, and reusable item view slot pooling (`MobileLazyViewportPool`) backed by `AndroidLazyListImpl` and `IosLazyListImpl` |

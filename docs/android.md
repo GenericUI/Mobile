@@ -1,57 +1,50 @@
-# `:mobile:android` — Native Android Backend (`androidMain`)
+# Android Native Backend (`:mobile` `androidMain` / `BackendTarget.Android`)
+
+> **Module Guide**: [**`:mobile` (`../README.md`)**](../README.md) | **Related**: [`../../docs/jvm.md`](../../docs/jvm.md) · [`common.md`](common.md) · [`ios.md`](ios.md)
 
 ## Overview
-`:mobile:android` is the native Android backend for GenericUI, built on standard Android SDK `View` / `ViewGroup` classes, AndroidX `AppCompatActivity`, and Material Components (`MaterialButton`, `MaterialToolbar`, `TabLayout`, `Slider`, `SwitchMaterial`, `DrawerLayout`). It depends on `:common`, `:systemCommon`, and `:mobile:common`.
+The **Android** backend resides in `androidMain` of `:mobile` atop `:common`, `:system`, `:mobile` `commonMain`, and [`:jvm`](../../docs/jvm.md), built on Android SDK `View` / `ViewGroup` classes (`AndroidBaseContainerNativeImpl`, `AndroidViewHandle`), AndroidX `AppCompatActivity`, and Material Components (`MaterialButton`, `MaterialToolbar`, `TabLayout`, `Slider`, `SwitchMaterial`).
 
 ---
 
-## Native Android Control Rendering (`BootstrapType.NONE`), `ThemeConfig` Drawable Tinting (`BootstrapType != NONE`), & System Style Restraints
+## 60+Hz Hardware `backdrop-filter` (`AndroidHardwareBackdropBlurController` + `TextureView`)
 
-1. **`BootstrapType.NONE` Default — 100% Unmodified Android / Material System Views**:
-   - Native Android applications **never** use Bootstrap CSS styling.
-   - When `component.getBootstrap().type == BootstrapType.NONE` (`BootstrapType.None`, the default), `AndroidBaseNativeImpl` renders the **100% unmodified genuine Android / Material system view** (`MaterialButton`, `AppCompatEditText`, `AppCompatCheckBox`, `SwitchMaterial`, `Slider` with its original `defaultNativeBackground` drawable and `ViewCompat.setBackgroundTintList(view, null)`) for the active `LIGHT` / `DARK` theme.
-2. **`BootstrapType != BootstrapType.NONE` — Native Material Drawable Tinting + Contrasting Text**:
-   - When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `AndroidBaseNativeImpl` tints the native Android `View` drawable (`ViewCompat.setBackgroundTintList(view, ColorStateList.valueOf(tintColor))`) using the active `ThemeConfig` / `BootstrapColorPalette.resolveColor(type, darkTheme)` while preserving native Material elevation, ripples, and pressed/disabled states, and renders contrasting text on top (`outline = true/false`).
-3. **System Backend Typography vs. Aesthetic Style Restraints**:
-   - **Text / Typography Elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`)**: Honor typography and text-color properties (`color` / `textColor`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration`, `textTransform`, `textOverflow`, `whiteSpace`, `wordBreak`).
-   - **Buttons, Inputs, Controls, & Standard Containers**: Aesthetic skinning and typography overrides on `ComponentStyle` (`backgroundColor`, `background`, `color`, `accentColor`, `borderColor`, `borderWidth`, `borderStyle`, `borderRadius`, `boxShadow`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`) are **silently ignored** (never replacing a standard control's native background with a custom `GradientDrawable`). Standard components can **ONLY** be tinted via `BootstrapType`.
-   - **`StyledContainer` & `StyledButton` (and `:extensions:alien`)**: Honor full `ComponentStyle` aesthetic (`GradientDrawable` background/border/radius) and typography properties.
-4. **Strict User CSS Class Isolation**:
-   - In `AndroidBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the Android `LayoutParams` and view styling engine.
+- Implemented in [`AndroidHardwareBackdropBlurController`](../src/androidMain/kotlin/com/nexustools/genericui/android/AndroidHardwareBackdropBlurController.kt) and attached to `AndroidFlexContainerView` (`AndroidStyledContainerImpl`) and `AndroidStyledButtonView` (`AndroidStyledButtonImpl`), while `TextBubble` strips `backdropFilter` via `withoutBackdropFilter()`.
+- **Root Walk & Strict Pre-Order Sampling**: Walks up to the nearest backdrop root (`android.R.id.content` or outermost root view above `DecorView`) and paints strictly pre-order preceding branches in `layerZIndex` order, avoiding feedback self-blur.
+- **API 31+ Hardware Path**: Renders captured behind-the-surface content into an offscreen `android.graphics.RenderNode`, attaches `RenderEffect.createBlurEffect(...)` (plus optional `ColorMatrixColorFilter` saturation/brightness/contrast), and composites at 60–120Hz via GPU hardware acceleration.
+- **Live `TextureView` Video Observing**: Observes underlying `TextureView` surfaces with `SurfaceTextureListener` (`SurfaceUpdateRelayListener`), copying `TextureView.getBitmap(downsampledBitmap)` and triggering `postInvalidateOnAnimation()` on `onSurfaceTextureUpdated` so glass HUD overlays blur live video continuously.
+- **API 24–30 & Robolectric Fallback**: Falls back transparently to downsampled cached `Bitmap` rendering + zero-allocation `FastBackdropBlurKernel.applyBackdropToArgbRegion`.
 
 ---
 
-## Precompiled `.scss` Stylesheets, Automatic Android Material XML Generation (`@style/Theme.GenericUI.App`), & `IApplication` Theming (`ThemeMode.AUTO` & `ThemeConfig`)
+## Runtime View, Virtualized List, Multicast UDP, & Lifecycle Bridges
 
-- **Automatic Android Material Theme XML Generation (`@style/Theme.GenericUI.App`)**:
-  - From the `genericui { theme { ... } }` block in `build.gradle.kts`, `GenericUiGenerateAndroidActivitiesTask` automatically generates:
-    - `res/values/genericui_theme_colors.xml` (`genericui_color_primary`, `genericui_color_secondary`, `genericui_color_accent`, `genericui_color_success`, `genericui_color_danger`, `genericui_color_warning`, `genericui_color_info`, plus light/dark surface/background/text/border colors).
-    - `res/values/themes.xml` (`@style/Theme.GenericUI.App` inheriting `Theme.Material3.DayNight.NoActionBar` or `Theme.Material3.Light.NoActionBar` with `colorPrimary`, `colorSecondary`, `colorTertiary`, `colorError`, `android:colorBackground`, `colorSurface`, `colorOnPrimary`, `colorOnSurface`, `android:statusBarColor`, and `android:navigationBarColor`).
-    - `res/values-night/themes.xml` (`@style/Theme.GenericUI.App` dark palette overrides).
-  - The generated `AndroidManifest.xml` automatically applies `android:theme="@style/Theme.GenericUI.App"` to `<application>`, and `GeneratedAndroidApplication.onCreate()` initializes `app.setThemeConfig(ThemeConfig(...))` at startup.
-- **Build-Time `.scss` Precompilation**: `.scss` files in `src/commonMain/resources/**` generate `ResourceType.STYLE` (`R.style.<name>`) and precompile via `SassKotlinPrecompiler` into `PrecompiledStyleSheet` objects. When `styles { globalStyleSheet = "styles/main.scss" }` is configured in `build.gradle.kts`, `GenericUiGenerateAndroidActivitiesTask` emits `app.addStyleSheet(...)` inside `GeneratedAndroidApplication.onCreate()`.
-- **System Theme Detection (`ThemeMode.AUTO` Default)**:
-  - `AndroidApplicationImpl` defaults to `ThemeMode.AUTO`, reading `resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK` (`UiModeManager` / `UI_MODE_NIGHT_YES` vs. `UI_MODE_NIGHT_NO`), listening to `onConfigurationChanged`, and calling `AppCompatDelegate.setDefaultNightMode(MODE_NIGHT_FOLLOW_SYSTEM | MODE_NIGHT_YES | MODE_NIGHT_NO)`.
+- **`AndroidViewHandle` & `AndroidBaseContainerNativeImpl`**: Manages native Android `View` attachment, child ordering, layout/measure invalidation, focus/visibility flags, `layerZIndex` sorting, and `ComponentBootstrap` layout parameters inside `AndroidFlexContainerView`.
+- **`AndroidLazyListImpl`**: Pairs Android vertical/horizontal scroll containers (`ScrollView` / `HorizontalScrollView`) with `:mobile`'s `MobileLazyViewportPool` to virtualize and recycle large list viewports.
+- **`AndroidUdpSocketNativeImpl`**: Wraps `:jvm`'s `JvmUdpSocketNativeImpl` with a reference-counted Android `WifiManager.MulticastLock` tagged `"genericui-udp-multicast"` (automatically acquired on multicast join/broadcast and released on close), enabling reliable device discovery protocols (e.g., SSDP / mDNS / Cast) on physical Android hardware.
+- **`AndroidExtensionRuntimeBridge`**: Centralizes `Application.onCreate`, `Activity` create/start/resume/pause/stop/destroy/activityResult/permissions callbacks (`GenericUiAndroidApplication` -> `GenericUiFragmentActivity`), notification channel registration, and foreground service promotion (`promoteToForegroundService`).
 
 ---
 
-## Generated `AndroidManifest.xml`, 1:1 `AppCompatActivity` Subclasses, & `AndroidLauncher`
+## Android `ServiceWorker` Architecture (`GeneratedAndroidServiceWorkerService` & Notifications)
 
-During the build, `GenericUiGenerateLaunchersTask` / `GenericUiGenerateAndroidActivitiesTask` scans `src/commonMain/kotlin` for `@MainAppFragment` and `@AppFragment` annotations and generates:
-1. **`AndroidManifest.xml`**: Declares permissions, features, metadata, `GeneratedAndroidApplication`, the `@MainAppFragment` launcher `<activity>`, a separate `<activity>` for every `@AppFragment`, and `<service>` entries from `genericui { android { manifest { ... } services { ... } } }`.
-2. **1:1 `AppCompatActivity` Subclasses**: Every `@MainAppFragment` and `@AppFragment` receives its own `<FragmentName>Activity : GenericUiFragmentActivity()`.
-3. **`AndroidActivityRegistry` & Intent-Based `launchFragment` Routing**: `GeneratedAndroidApplication` initializes the Android runtime in `onCreate()` and registers every `fragmentId -> Activity::class.java` mapping so `launchFragment(...)` starts the target `Activity` via Android `Intent` with serialized `FragmentBundle` extras.
-
----
-
-## Window Chrome, `TitleCapabilities`, & `AndroidNavbarImpl` (`MaterialToolbar`)
-
-On Android (`AndroidWindowImpl` & `GenericUiFragmentActivity`), `TitleCapabilities` has `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true`:
-- **No `TitleBar` and no `MenuBar` set**: No top bar is mounted (`MaterialToolbar` is omitted).
-- **`TitleBar` and/or `MenuBar` set**: Mounts a top navbar (`MaterialToolbar` / `AndroidNavbarImpl`) with single-placement custom components (`mountedInTitleBar = true`) and a merged right-aligned `MenuBar` dropdown (`☰`).
+1. **Foreground Service & Ongoing Notification (`AndroidServiceWorkerController`)**:
+   - `ServiceWorkerExtensionContributor` emits `GeneratedAndroidServiceWorkerService` (extending `GenericUiAndroidService`) plus `<service android:foregroundServiceType="...">` in `AndroidManifest.xml` (mapping `specialUse`, `mediaPlayback`, `dataSync`, `microphone`, `camera`, `location`, etc.).
+   - Runs worker logic on a dedicated `"GenericUI-ServiceWorker"` executor thread while calling `ServiceCompat.startForeground` via `AndroidExtensionRuntimeBridge` with a default notification channel (`genericui.serviceworker.<pkg>`), a default `"Stop"` button (`ServiceWorkerNotificationAction.DEFAULT_STOP_ACTION_ID` -> `ACTION_STOP_SERVICE`), dynamic `updateNotificationText` / `setNotificationTitle` / `setNotificationText` / `setNotificationSubText` updates, and `extendNotificationActions` / `replaceNotificationActions` action intents.
+2. **In-Process `Binder` IPC & Conditional `BOOT_COMPLETED` Receiver**:
+   - `AndroidServiceWorkerBinder` exposes direct in-process client/service binding alongside `ServiceWorkerChannel`.
+   - When `ServiceWorkerOptions.autostart == true`, codegen emits `RECEIVE_BOOT_COMPLETED` permission and `GeneratedAndroidServiceWorkerBootReceiver` (`ACTION_BOOT_COMPLETED`, `ACTION_MY_PACKAGE_REPLACED`); when `autostart == false`, zero boot receiver is generated.
 
 ---
 
-## Compiled Android `res/` Resources (`AndroidResourceResolverImpl`)
+## Consumer `.so` 16KB ELF & ZIP Page Alignment
 
-During the Gradle build, `GenericUiCompileResourcesTask` compiles `src/commonMain/resources/` into standard Android `res/` directories, resolved at runtime by `AndroidResourceResolverImpl` via `Context.resources`.
+`GenericUiCompileJniTask` / `GenericUiAndroidToolchain` link consumer C/C++ native libraries (`pageSize16Kb = true` default) with `-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384`, and `GenericUiPackageAndroidApkTask` aligns `STORED` `.so` entries inside the APK to `16384`-byte boundaries and runs `zipalign -f -P 16 4` (with Android 15+ 16KB page compatibility out of the box), paired at runtime with `:jvm` [`JniLibraryLoader`](../../docs/jvm.md).
+
+---
+
+## Native Material Rendering, Material XML Themes, Activities, & Resources
+
+- **`BootstrapType.NONE` vs. `!= NONE` & Style Restraints**: Unmodified Material/AppCompat views by default; `ViewCompat.setBackgroundTintList` + contrasting text when `BootstrapType != NONE`; full `ComponentStyle` honored on `StyledContainer`, `StyledButton`, and `:extensions:ui:alien`; user classes strictly isolated in `styleSnapshot.customClasses`.
+- **Generated Material XML & 1:1 Activities**: Generates `genericui_theme_colors.xml`, `values/themes.xml`, `values-night/themes.xml` (`@style/Theme.GenericUI.App`), `AndroidManifest.xml`, `GeneratedAndroidApplication`, and 1:1 `<FragmentName>Activity : GenericUiFragmentActivity` (`AndroidActivityRegistry`, `AndroidLauncher`).
+- **Title Chrome & Resources**: `TitleCapabilities` hides top navbar unless `TitleBar` or `MenuBar` is configured (`MaterialToolbar` / `AndroidNavbarImpl`); `AndroidResourceResolverImpl` loads `res/` and assets via `Context.resources`.

@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.InsetDrawable
 import android.view.Gravity
 import android.widget.TextView
 import androidx.appcompat.widget.AppCompatButton
@@ -27,7 +28,9 @@ object AndroidControlTintRenderUtil {
         context: Context,
         implProvider: () -> AndroidButtonImpl?
     ): AppCompatButton = object : AppCompatButton(context) {
-        private var paintingOffscreenEmpty: Boolean = false
+        private var cachedSurfaceBitmap: Bitmap? = null
+        private var cachedSurfaceKey: String = ""
+        private val measurePaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         init {
             isAllCaps = false
@@ -35,16 +38,54 @@ object AndroidControlTintRenderUtil {
             includeFontPadding = false
             minWidth = 0
             minimumWidth = 0
+            setHorizontallyScrolling(false)
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            cachedSurfaceBitmap?.recycle()
+            cachedSurfaceBitmap = null
+            cachedSurfaceKey = ""
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            val impl = implProvider()
+            if (impl != null && impl !is AndroidStyledButtonImpl && MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.EXACTLY) {
+                val label = text?.toString().orEmpty()
+                val leftIcon = compoundDrawables.getOrNull(0)
+                val iconW = leftIcon?.bounds?.width()?.takeIf { it > 0 } ?: leftIcon?.intrinsicWidth?.takeIf { it > 0 } ?: 0
+                if (label.isNotEmpty() || iconW > 0) {
+                    measurePaint.textSize = textSize
+                    measurePaint.typeface = typeface ?: Typeface.DEFAULT_BOLD
+                    val textW = if (label.isNotEmpty()) measurePaint.measureText(label) else 0f
+                    val gap = if (iconW > 0 && label.isNotEmpty()) AndroidViewHandle.dpToPx(6) else 0
+                    val safetyPx = AndroidViewHandle.dpToPx(4)
+                    val requiredW = (textW + iconW + gap + paddingLeft + paddingRight + safetyPx).roundToInt()
+                    if (requiredW > measuredWidth) {
+                        setMeasuredDimension(resolveSize(requiredW, widthMeasureSpec), measuredHeight)
+                    }
+                }
+            }
         }
 
         override fun onDraw(canvas: Canvas) {
-            if (paintingOffscreenEmpty) {
+            val impl = implProvider()
+            if (impl == null) {
                 super.onDraw(canvas)
                 return
             }
-            val impl = implProvider()
-            if (impl == null || impl is AndroidStyledButtonImpl) {
+            if (impl is AndroidStyledButtonImpl) {
                 super.onDraw(canvas)
+                val iconDrawable = impl.resolvedStyledIconDrawable
+                if (iconDrawable != null && text.isNullOrEmpty() && width > 0 && height > 0) {
+                    val targetSize = (kotlin.math.min(width, height) * 0.45f).roundToInt()
+                        .coerceIn(AndroidViewHandle.dpToPx(16), AndroidViewHandle.dpToPx(28))
+                    val left = (width - targetSize) / 2
+                    val top = (height - targetSize) / 2
+                    iconDrawable.setBounds(left, top, left + targetSize, top + targetSize)
+                    iconDrawable.draw(canvas)
+                }
                 return
             }
             val type = impl.getType() ?: BootstrapType.NONE
@@ -69,25 +110,22 @@ object AndroidControlTintRenderUtil {
             val themeConfig = BootstrapColorPalette.activeThemeConfig
             val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
             val defaultBg = impl.getDefaultNativeBackgroundDrawable()
-
-            val savedText = text
-            val savedCompoundDrawables = compoundDrawables
-            paintingOffscreenEmpty = true
-            val offscreenBitmap: Bitmap? = try {
-                text = ""
-                setCompoundDrawables(null, null, null, null)
-                val customDraw: ((Canvas) -> Unit)? = if (defaultBg != null) {
+            val rawBg = (defaultBg ?: background?.takeIf { it !is AndroidTintedButtonDrawable })?.let {
+                unwrapInsetDrawable(it)
+            }
+            val stateKey = "$w:$h:${type.ordinal}:$isDark:$outline:${borderRadius?.ordinal ?: -1}:$hovered:$pressed:$disabled:${themeConfig.hashCode()}:${if (rawBg != null) 1 else 0}"
+            var offscreenBitmap = cachedSurfaceBitmap
+            if (offscreenBitmap == null || offscreenBitmap.isRecycled || cachedSurfaceKey != stateKey) {
+                val customDraw: ((Canvas) -> Unit)? = if (rawBg != null) {
                     { offscreenCanvas ->
-                        defaultBg.state = drawableState
-                        defaultBg.setBounds(0, 0, w, h)
-                        defaultBg.draw(offscreenCanvas)
+                        rawBg.state = drawableState
+                        rawBg.setBounds(0, 0, w, h)
+                        rawBg.draw(offscreenCanvas)
                     }
-                } else if (background !is AndroidTintedButtonDrawable) {
-                    { offscreenCanvas -> super.onDraw(offscreenCanvas) }
                 } else {
                     null
                 }
-                renderEmptyTextTintedBitmap(
+                val rendered = renderEmptyTextTintedBitmap(
                     button = this,
                     width = w,
                     height = h,
@@ -102,26 +140,31 @@ object AndroidControlTintRenderUtil {
                     pressed = pressed,
                     disabled = disabled
                 )
-            } finally {
-                text = savedText
-                setCompoundDrawables(
-                    savedCompoundDrawables.getOrNull(0),
-                    savedCompoundDrawables.getOrNull(1),
-                    savedCompoundDrawables.getOrNull(2),
-                    savedCompoundDrawables.getOrNull(3)
-                )
-                paintingOffscreenEmpty = false
+                if (rendered != null) {
+                    offscreenBitmap?.recycle()
+                    cachedSurfaceBitmap = rendered
+                    cachedSurfaceKey = stateKey
+                    offscreenBitmap = rendered
+                }
             }
 
-            if (offscreenBitmap != null) {
+            if (offscreenBitmap != null && !offscreenBitmap.isRecycled) {
+                val sx = scrollX
+                val sy = scrollY
+                if (sx != 0 || sy != 0) {
+                    canvas.save()
+                    canvas.translate(sx.toFloat(), sy.toFloat())
+                }
                 canvas.drawBitmap(offscreenBitmap, 0f, 0f, null)
+                val currentLabel = text?.toString().orEmpty()
+                val leftIcon = compoundDrawables.getOrNull(0)
                 drawContrastingTextAndIconOverlay(
                     canvas = canvas,
                     button = this,
                     width = w,
                     height = h,
-                    label = savedText?.toString().orEmpty(),
-                    iconDrawable = savedCompoundDrawables.getOrNull(0),
+                    label = currentLabel,
+                    iconDrawable = leftIcon,
                     type = type,
                     darkMode = isDark,
                     outline = outline,
@@ -129,10 +172,23 @@ object AndroidControlTintRenderUtil {
                     hovered = hovered,
                     pressed = pressed
                 )
+                if (sx != 0 || sy != 0) {
+                    canvas.restore()
+                }
             } else {
                 super.onDraw(canvas)
             }
         }
+    }
+
+    private fun unwrapInsetDrawable(drawable: Drawable): Drawable {
+        var current = drawable
+        var depth = 0
+        while (current is InsetDrawable && depth < 4) {
+            current = current.drawable ?: break
+            depth++
+        }
+        return current
     }
 
     fun resolveCornerRadiusPx(
@@ -238,7 +294,8 @@ object AndroidControlTintRenderUtil {
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             if (bmp != null && button != null) {
                 val canvas = Canvas(bmp)
-                button.background?.takeIf { it !is AndroidTintedButtonDrawable }?.let { bg ->
+                button.background?.takeIf { it !is AndroidTintedButtonDrawable }?.let { rawBg ->
+                    val bg = unwrapInsetDrawable(rawBg)
                     bg.setBounds(0, 0, w, h)
                     bg.draw(canvas)
                 }

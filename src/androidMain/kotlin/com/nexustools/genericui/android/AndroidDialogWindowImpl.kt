@@ -85,9 +85,11 @@ class AndroidDialogWindowImpl : AndroidBaseContainerNativeImpl("androidx.appcomp
     override fun setTitle(title: String) {
         titleText = title
         nativeWidget.text = title
-        runCatching {
-            dialogTitleView?.text = title
-            activeDialog?.setTitle(title)
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                dialogTitleView?.text = title
+                activeDialog?.setTitle(title)
+            }
         }
     }
 
@@ -111,162 +113,170 @@ class AndroidDialogWindowImpl : AndroidBaseContainerNativeImpl("androidx.appcomp
 
     override fun showDialog(ownerWindow: WindowNativeImpl<*>?) {
         setVisible(true)
-        runCatching {
-            val activity = resolveHostActivity() ?: return@runCatching
-            if (activity.isFinishing || activity.isDestroyed) return@runCatching
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val activity = resolveHostActivity() ?: return@runCatching
+                if (activity.isFinishing || activity.isDestroyed) return@runCatching
 
-            activeDialog?.let { existing ->
-                suppressDismissCallback = true
-                try {
-                    if (existing.isShowing) existing.dismiss()
-                } finally {
-                    suppressDismissCallback = false
+                activeDialog?.let { existing ->
+                    suppressDismissCallback = true
+                    try {
+                        if (existing.isShowing) existing.dismiss()
+                    } finally {
+                        suppressDismissCallback = false
+                    }
                 }
-            }
 
-            val contentView = ensureAndroidView(activity) ?: return@runCatching
-            (contentView.parent as? ViewGroup)?.removeView(contentView)
+                val contentView = ensureAndroidView(activity) ?: return@runCatching
+                (contentView.parent as? ViewGroup)?.removeView(contentView)
 
-            val isDark = AndroidViewHandle.isDarkTheme()
-            val surfaceBgArgb = if (isDark) 0xFF1E222A.toInt() else 0xFFFFFFFF.toInt()
-            val borderArgb = if (isDark) 0xFF2E3440.toInt() else 0xFFE0E4EC.toInt()
-            val titleArgb = if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
-            val closeFgArgb = if (isDark) 0xFFA5B0C2.toInt() else 0xFF5A6270.toInt()
+                val isDark = AndroidViewHandle.isDarkTheme()
+                val surfaceBgArgb = if (isDark) 0xFF1E222A.toInt() else 0xFFFFFFFF.toInt()
+                val borderArgb = if (isDark) 0xFF2E3440.toInt() else 0xFFE0E4EC.toInt()
+                val titleArgb = if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
+                val closeFgArgb = if (isDark) 0xFFA5B0C2.toInt() else 0xFF5A6270.toInt()
 
-            val pad = AndroidViewHandle.dpToPx(16)
-            val rootLayout = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(pad, pad, pad, pad)
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.RECTANGLE
-                    cornerRadius = AndroidViewHandle.dpToPxFloat(12f)
-                    setColor(surfaceBgArgb)
-                    setStroke(AndroidViewHandle.dpToPx(1).coerceAtLeast(1), borderArgb)
+                val pad = AndroidViewHandle.dpToPx(16)
+                val rootLayout = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(pad, pad, pad, pad)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = AndroidViewHandle.dpToPxFloat(12f)
+                        setColor(surfaceBgArgb)
+                        setStroke(AndroidViewHandle.dpToPx(1).coerceAtLeast(1), borderArgb)
+                    }
                 }
-            }
 
-            val headerRow = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                val bottomPad = AndroidViewHandle.dpToPx(10)
-                setPadding(0, 0, 0, bottomPad)
-            }
-            val titleTv = AppCompatTextView(activity).apply {
-                text = titleText
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(titleArgb)
-            }
-            dialogTitleView = titleTv
-            val closeBtn = AppCompatButton(activity).apply {
-                text = "\u2715"
-                isAllCaps = false
-                gravity = Gravity.CENTER
-                minWidth = 0
-                minimumWidth = 0
-                minHeight = 0
-                minimumHeight = 0
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                setTextColor(closeFgArgb)
-                background = ColorDrawable(Color.TRANSPARENT)
-                val closePad = AndroidViewHandle.dpToPx(6)
-                setPadding(closePad, closePad, closePad, closePad)
-                setOnClickListener {
-                    closeDialog()
+                val headerRow = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    val bottomPad = AndroidViewHandle.dpToPx(10)
+                    setPadding(0, 0, 0, bottomPad)
                 }
-            }
-            headerRow.addView(
-                titleTv,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            )
-            headerRow.addView(
-                closeBtn,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
+                val titleTv = AppCompatTextView(activity).apply {
+                    text = titleText
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(titleArgb)
+                }
+                dialogTitleView = titleTv
+                val closeBtn = AppCompatButton(activity).apply {
+                    text = "\u2715"
+                    isAllCaps = false
+                    gravity = Gravity.CENTER
+                    minWidth = 0
+                    minimumWidth = 0
+                    minHeight = 0
+                    minimumHeight = 0
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    setTextColor(closeFgArgb)
+                    background = ColorDrawable(Color.TRANSPARENT)
+                    val closePad = AndroidViewHandle.dpToPx(6)
+                    setPadding(closePad, closePad, closePad, closePad)
+                    setOnClickListener {
+                        closeDialog()
+                    }
+                }
+                headerRow.addView(
+                    titleTv,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 )
-            )
-            rootLayout.addView(
-                headerRow,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
+                headerRow.addView(
+                    closeBtn,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
                 )
-            )
-
-            val scrollView = ScrollView(activity).apply {
-                isFillViewport = true
-            }
-            scrollView.addView(
-                contentView,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
+                rootLayout.addView(
+                    headerRow,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
                 )
-            )
-            rootLayout.addView(
-                scrollView,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
+
+                val scrollView = ScrollView(activity).apply {
+                    isFillViewport = true
+                }
+                scrollView.addView(
+                    contentView,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
                 )
-            )
+                rootLayout.addView(
+                    scrollView,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f
+                    )
+                )
 
-            val dialog = AppCompatDialog(activity)
-            dialog.supportRequestWindowFeature(Window.FEATURE_NO_TITLE)
-            dialog.setContentView(rootLayout)
-            dialog.setCancelable(true)
-            dialog.setCanceledOnTouchOutside(true)
-            dialog.setOnDismissListener {
-                if (suppressDismissCallback) return@setOnDismissListener
-                activeDialog = null
-                dialogTitleView = null
-                if (isVisible()) {
-                    setVisible(false)
-                    onClosedListener?.invoke()
+                val dialog = AppCompatDialog(activity)
+                dialog.supportRequestWindowFeature(Window.FEATURE_NO_TITLE)
+                dialog.setContentView(rootLayout)
+                dialog.setCancelable(true)
+                dialog.setCanceledOnTouchOutside(true)
+                dialog.setOnDismissListener {
+                    if (suppressDismissCallback) return@setOnDismissListener
+                    activeDialog = null
+                    dialogTitleView = null
+                    AndroidViewHandle.dispatchOnLogicThread {
+                        if (isVisible()) {
+                            setVisible(false)
+                            onClosedListener?.invoke()
+                        }
+                    }
                 }
-            }
-            activeDialog = dialog
-            dialog.show()
+                activeDialog = dialog
+                dialog.show()
 
-            dialog.window?.let { win ->
-                win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                val dm = activity.resources.displayMetrics
-                val dialogWidth = if (fullscreenFlag) {
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                } else {
-                    (dm.widthPixels * 0.92f).toInt()
+                dialog.window?.let { win ->
+                    win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                    val dm = activity.resources.displayMetrics
+                    val dialogWidth = if (fullscreenFlag) {
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    } else {
+                        (dm.widthPixels * 0.92f).toInt()
+                    }
+                    val dialogHeight = if (fullscreenFlag) {
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    } else {
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    }
+                    win.setLayout(dialogWidth, dialogHeight)
+                    win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
                 }
-                val dialogHeight = if (fullscreenFlag) {
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                } else {
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                }
-                win.setLayout(dialogWidth, dialogHeight)
-                win.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
             }
         }
     }
 
     override fun closeDialog() {
-        setVisible(false)
-        runCatching {
-            val dialog = activeDialog
-            activeDialog = null
-            dialogTitleView = null
-            if (dialog != null) {
-                suppressDismissCallback = true
-                try {
-                    if (dialog.isShowing) {
-                        dialog.dismiss()
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val dialog = activeDialog
+                activeDialog = null
+                dialogTitleView = null
+                if (dialog != null) {
+                    suppressDismissCallback = true
+                    try {
+                        if (dialog.isShowing) {
+                            dialog.dismiss()
+                        }
+                    } finally {
+                        suppressDismissCallback = false
                     }
-                } finally {
-                    suppressDismissCallback = false
                 }
             }
         }
-        onClosedListener?.invoke()
+        AndroidViewHandle.dispatchOnLogicThread {
+            setVisible(false)
+            onClosedListener?.invoke()
+        }
     }
 
     override fun setOnDialogClosed(listener: (() -> Unit)?) {

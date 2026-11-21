@@ -1,7 +1,5 @@
 package com.nexustools.genericui.android
 
-import android.graphics.RenderEffect
-import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import com.nexustools.genericui.component.layout.LayoutBackendTarget
@@ -12,6 +10,8 @@ import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
 import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssFilter
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.Gradient
 import com.nexustools.genericui.style.gradient.Gradient.LinearGradient
@@ -35,7 +35,73 @@ class AndroidStyledContainerImpl(
         nativeWidget.attributes["antialiasing"] = "true"
     }
 
+    override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
+
     fun getComputedStyle(): ComputedStyle? = lastComputedStyle
+
+    private fun isTextBubbleComponent(): Boolean {
+        val tokens = componentClassPrefix.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return tokens.any { token ->
+            val norm = token.removePrefix("genericui:")
+            norm == "text-bubble" || norm == "textbubble" || norm == "gui-text-bubble"
+        }
+    }
+
+    private fun applyVisualsToAndroidView(visuals: StyledVisualSpec) {
+        if (nativeWidget.androidView == null) return
+        val effVisuals = if (isTextBubbleComponent()) visuals.withoutBackdropFilter() else visuals
+        val rawBlurPx = effVisuals.backdropBlurPx ?: effVisuals.backdropFilter?.blur?.resolvePx()
+        val rawCornerRadiusPx = (effVisuals.borderRadiusPx ?: 0f).coerceAtLeast(0f)
+        val shadowBlurPx = effVisuals.boxShadowBlurPx
+        val shadowColor = effVisuals.boxShadowColor
+
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val view = nativeWidget.androidView ?: return@runCatching
+                if (Build.VERSION.SDK_INT >= 31) {
+                    view.setRenderEffect(null)
+                }
+                if (shadowBlurPx != null && shadowBlurPx > 0f) {
+                    view.elevation = shadowBlurPx
+                }
+                if (shadowColor != null && Build.VERSION.SDK_INT >= 28) {
+                    val argb = shadowColor.toArgbInt()
+                    view.outlineAmbientShadowColor = argb
+                    view.outlineSpotShadowColor = argb
+                }
+                val gradDrawable = buildGradientDrawable(effVisuals)
+                val flexView = view as? AndroidFlexContainerView
+                if (effVisuals.hasBackdropFilter && flexView != null) {
+                    view.background = null
+                    flexView.setWillNotDraw(false)
+                    val scaledBlurPx = rawBlurPx?.takeIf { it > 0f }?.let { AndroidViewHandle.dpToPxFloat(it) }
+                    flexView.backdropBlurPx = scaledBlurPx ?: 0f
+                    flexView.backdropFilter = effVisuals.backdropFilter?.let { f ->
+                        if (scaledBlurPx != null) f.copy(blur = CssLength.px(scaledBlurPx)) else f
+                    } ?: scaledBlurPx?.let { CssFilter.blur(CssLength.px(it)) }
+                    flexView.backdropCornerRadiusPx = if (rawCornerRadiusPx > 0f) {
+                        AndroidViewHandle.dpToPxFloat(rawCornerRadiusPx)
+                    } else {
+                        0f
+                    }
+                    flexView.backdropOverlayDrawable = gradDrawable
+                } else {
+                    if (flexView != null) {
+                        flexView.backdropBlurPx = 0f
+                        flexView.backdropFilter = null
+                        flexView.backdropCornerRadiusPx = 0f
+                        flexView.backdropOverlayDrawable = null
+                    }
+                    view.background = gradDrawable
+                }
+            }
+        }
+    }
+
+    override fun syncAndroidView() {
+        super.syncAndroidView()
+        applyVisualsToAndroidView(getStyledVisuals())
+    }
 
     protected fun syncVisualsToAndroidView() {
         val visuals = getStyledVisuals()
@@ -53,19 +119,9 @@ class AndroidStyledContainerImpl(
         if (blurPx != null && blurPx > 0f) {
             nativeWidget.attributes["backdropBlurPx"] = blurPx.toString()
             nativeWidget.attributes["androidRenderEffect"] = "blur(${blurPx}px)"
-            if (Build.VERSION.SDK_INT >= 31) {
-                runCatching {
-                    nativeWidget.androidView?.setRenderEffect(
-                        RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
-                    )
-                }
-            }
         } else {
             nativeWidget.attributes.remove("backdropBlurPx")
             nativeWidget.attributes.remove("androidRenderEffect")
-            if (Build.VERSION.SDK_INT >= 31) {
-                runCatching { nativeWidget.androidView?.setRenderEffect(null) }
-            }
         }
 
         if (visuals.backdropFilter != null) {
@@ -76,19 +132,11 @@ class AndroidStyledContainerImpl(
 
         if (visuals.boxShadowBlurPx != null && visuals.boxShadowBlurPx > 0f) {
             nativeWidget.attributes["boxShadowBlurPx"] = visuals.boxShadowBlurPx.toString()
-            nativeWidget.androidView?.elevation = visuals.boxShadowBlurPx
         } else {
             nativeWidget.attributes.remove("boxShadowBlurPx")
         }
         if (visuals.boxShadowColor != null) {
             nativeWidget.attributes["boxShadowColor"] = visuals.boxShadowColor.toCssRgbaString()
-            if (Build.VERSION.SDK_INT >= 28) {
-                val argb = visuals.boxShadowColor.toArgbInt()
-                runCatching {
-                    nativeWidget.androidView?.outlineAmbientShadowColor = argb
-                    nativeWidget.androidView?.outlineSpotShadowColor = argb
-                }
-            }
         } else {
             nativeWidget.attributes.remove("boxShadowColor")
         }
@@ -96,11 +144,18 @@ class AndroidStyledContainerImpl(
         if (visuals.widthPx != null || visuals.heightPx != null) {
             val w = visuals.widthPx ?: nativeWidget.bounds.width
             val h = visuals.heightPx ?: nativeWidget.bounds.height
+            if (visuals.widthPx != null && visuals.widthPx > 0) {
+                nativeWidget.hasExplicitPreferredWidth = true
+            }
+            if (visuals.heightPx != null && visuals.heightPx > 0) {
+                nativeWidget.hasExplicitPreferredHeight = true
+            }
             nativeWidget.bounds = Rect(nativeWidget.bounds.x, nativeWidget.bounds.y, w, h)
             visuals.widthPx?.let { nativeWidget.attributes["widthPx"] = it.toString() }
             visuals.heightPx?.let { nativeWidget.attributes["heightPx"] = it.toString() }
+            super.syncAndroidView()
         }
-        nativeWidget.androidView?.background = buildGradientDrawable(visuals)
+        applyVisualsToAndroidView(visuals)
     }
 
     override fun setStyledVisuals(visuals: StyledVisualSpec) {
@@ -116,7 +171,8 @@ class AndroidStyledContainerImpl(
             snapshot = styleSnapshot,
             darkTheme = isDark
         )
-        return computedBase.mergeWith(styledVisuals).forBackend(LayoutBackendTarget.ANDROID)
+        val resolved = computedBase.mergeWith(styledVisuals).forBackend(LayoutBackendTarget.ANDROID)
+        return if (isTextBubbleComponent()) resolved.withoutBackdropFilter() else resolved
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
@@ -140,9 +196,9 @@ class AndroidStyledContainerImpl(
         internal fun buildGradientDrawable(spec: StyledVisualSpec): GradientDrawable {
             val drawable = GradientDrawable()
             drawable.shape = GradientDrawable.RECTANGLE
-            val radius = (spec.borderRadiusPx ?: 0f).coerceAtLeast(0f)
-            if (radius > 0f) {
-                drawable.cornerRadius = radius
+            val rawRadius = (spec.borderRadiusPx ?: 0f).coerceAtLeast(0f)
+            if (rawRadius > 0f) {
+                drawable.cornerRadius = AndroidViewHandle.dpToPxFloat(rawRadius)
             }
             val grad = spec.backgroundGradient
             if (grad != null && grad.stops.size >= 2) {
@@ -165,7 +221,7 @@ class AndroidStyledContainerImpl(
                     }
                     is RadialGradient -> {
                         drawable.gradientType = GradientDrawable.RADIAL_GRADIENT
-                        drawable.gradientRadius = 200f
+                        drawable.gradientRadius = AndroidViewHandle.dpToPxFloat(200f)
                     }
                     else -> {
                         spec.backgroundColor?.let { drawable.setColor(it.toArgbInt()) }
@@ -175,13 +231,24 @@ class AndroidStyledContainerImpl(
                 spec.backgroundColor?.let { drawable.setColor(it.toArgbInt()) }
             }
 
-            val borderW = (spec.borderWidthPx ?: 0f).roundToInt()
+            val rawBorderW = (spec.borderWidthPx ?: 0f).coerceAtLeast(0f)
+            val borderW = if (rawBorderW > 0f) AndroidViewHandle.dpToPx(rawBorderW).coerceAtLeast(1) else 0
             val borderCol = spec.borderColor
             if (borderW > 0 && borderCol != null && spec.borderStyle != CssBorderStyle.NONE) {
                 if (spec.borderStyle == CssBorderStyle.DASHED) {
-                    drawable.setStroke(borderW, borderCol.toArgbInt(), 8f, 4f)
+                    drawable.setStroke(
+                        borderW,
+                        borderCol.toArgbInt(),
+                        AndroidViewHandle.dpToPxFloat(8f),
+                        AndroidViewHandle.dpToPxFloat(4f)
+                    )
                 } else if (spec.borderStyle == CssBorderStyle.DOTTED) {
-                    drawable.setStroke(borderW, borderCol.toArgbInt(), 2f, 3f)
+                    drawable.setStroke(
+                        borderW,
+                        borderCol.toArgbInt(),
+                        AndroidViewHandle.dpToPxFloat(2f),
+                        AndroidViewHandle.dpToPxFloat(3f)
+                    )
                 } else {
                     drawable.setStroke(borderW, borderCol.toArgbInt())
                 }

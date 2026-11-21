@@ -12,6 +12,12 @@ import java.util.concurrent.CountDownLatch
 class AndroidUiThreadDispatcherNativeImpl : JvmUiThreadDispatcherBase(
     logicThreadName = LOGIC_THREAD_NAME
 ) {
+    override fun onLogicThreadStarted() {
+        if (Looper.myLooper() == null) {
+            Looper.prepare()
+        }
+    }
+
     private fun mainLooperThread(): Thread? =
         runCatching { Looper.getMainLooper()?.thread }.getOrNull()
 

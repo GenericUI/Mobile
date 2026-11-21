@@ -46,7 +46,11 @@ class AndroidTextImpl(
         AppCompatTextView(context)
 
     override fun shouldApplyBaseBackgroundDrawable(): Boolean =
-        if (isBadge()) false else super.shouldApplyBaseBackgroundDrawable()
+        if (isBadge() || customStyleBackgroundColor != null || customStyleBorderColor != null || (customStyleBorderWidthPx ?: 0f) > 0f) {
+            false
+        } else {
+            super.shouldApplyBaseBackgroundDrawable()
+        }
 
     override fun setText(text: String) {
         rawText = text
@@ -128,13 +132,20 @@ class AndroidTextImpl(
                 val activeTheme = BootstrapColorPalette.activeThemeConfig
                 if (isBadge()) {
                     val badgeType = getType()?.takeIf { it != BootstrapType.NONE } ?: BootstrapType.PRIMARY
-                    val bgArgb = BootstrapColorPalette.resolveColor(badgeType, isDark, activeTheme).toArgbInt()
+                    val bgArgb = customStyleBackgroundColor?.toArgbInt()
+                        ?: BootstrapColorPalette.resolveColor(badgeType, isDark, activeTheme).toArgbInt()
                     val fgArgb = customStyleTextColor?.toArgbInt()
                         ?: BootstrapColorPalette.resolveForegroundOn(badgeType, isDark, activeTheme).toArgbInt()
                     val pill = GradientDrawable().apply {
                         shape = GradientDrawable.RECTANGLE
-                        cornerRadius = AndroidViewHandle.dpToPxFloat(999f)
+                        val radiusDp = customStyleBorderRadiusPx?.takeIf { it >= 0f } ?: 999f
+                        cornerRadius = AndroidViewHandle.dpToPxFloat(radiusDp)
                         setColor(bgArgb)
+                        val bw = (customStyleBorderWidthPx ?: 0f).coerceAtLeast(0f)
+                        val bc = customStyleBorderColor
+                        if (bw > 0f && bc != null) {
+                            setStroke(AndroidViewHandle.dpToPx(bw).coerceAtLeast(1), bc.toArgbInt())
+                        }
                     }
                     tv.background = pill
                     val p = getPadding()
@@ -194,11 +205,41 @@ class AndroidTextImpl(
                         tv.letterSpacing = (letterSpacingPx / spSize).coerceIn(-0.2f, 1.0f)
                     }
 
+                    val hasCustomSurface = customStyleBackgroundColor != null ||
+                        customStyleBorderColor != null ||
+                        (customStyleBorderWidthPx ?: 0f) > 0f
+                    if (hasCustomSurface) {
+                        val surface = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            val r = (customStyleBorderRadiusPx ?: 0f).coerceAtLeast(0f)
+                            if (r > 0f) {
+                                cornerRadius = AndroidViewHandle.dpToPxFloat(r)
+                            }
+                            customStyleBackgroundColor?.let { setColor(it.toArgbInt()) }
+                            val bw = (customStyleBorderWidthPx ?: 0f).coerceAtLeast(0f)
+                            val bc = customStyleBorderColor
+                            if (bw > 0f && bc != null) {
+                                setStroke(AndroidViewHandle.dpToPx(bw).coerceAtLeast(1), bc.toArgbInt())
+                            }
+                        }
+                        tv.background = surface
+                        val pad = getPadding()
+                        if (pad.left != 0 || pad.top != 0 || pad.right != 0 || pad.bottom != 0) {
+                            tv.setPadding(
+                                AndroidViewHandle.dpToPx(pad.left),
+                                AndroidViewHandle.dpToPx(pad.top),
+                                AndroidViewHandle.dpToPx(pad.right),
+                                AndroidViewHandle.dpToPx(pad.bottom)
+                            )
+                        }
+                    }
+
                     val compAlign = compStyle?.getTextAlign()
                     val computedAlign = computed?.textAlign
                     val bootAlign = styleSnapshot.textAlignment
                     tv.gravity = when {
-                        compAlign == TextAlignment.CENTER || computedAlign == "center" || bootAlign == TextAlignment.CENTER -> Gravity.CENTER_HORIZONTAL
+                        compAlign == TextAlignment.CENTER || computedAlign == "center" || bootAlign == TextAlignment.CENTER ->
+                            if (hasCustomSurface) Gravity.CENTER else Gravity.CENTER_HORIZONTAL
                         compAlign == TextAlignment.END || computedAlign == "right" || computedAlign == "end" || bootAlign == TextAlignment.END -> Gravity.END
                         else -> Gravity.START
                     }

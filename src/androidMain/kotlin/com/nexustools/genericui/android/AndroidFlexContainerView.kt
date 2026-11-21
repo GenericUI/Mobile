@@ -1,15 +1,25 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import com.nexustools.genericui.component.layout.LayerAlignment
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.AlignSelf
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.enums.bootstrap.FlexWrap
 import com.nexustools.genericui.enums.bootstrap.JustifyContent
+import com.nexustools.genericui.style.css.CssFilter
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -59,11 +69,80 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
             }
         }
 
+    var aspectRatio: Float = 0f
+        set(value) {
+            val sanitized = if (value > 0f && value.isFinite()) value else 0f
+            if (field != sanitized) {
+                field = sanitized
+                requestLayout()
+            }
+        }
+
+    var isLayered: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                isChildrenDrawingOrderEnabled = value || isRatioContainer
+                requestLayout()
+            }
+        }
+
+    var isRatioContainer: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                isChildrenDrawingOrderEnabled = value || isLayered
+                requestLayout()
+            }
+        }
+
+    var pointerEventsNone: Boolean = false
+
+    internal val backdropController = AndroidHardwareBackdropBlurController(this)
+
+    var backdropFilter: CssFilter?
+        get() = backdropController.backdropFilter
+        set(value) {
+            backdropController.backdropFilter = value
+        }
+
+    var backdropBlurPx: Float
+        get() = backdropController.backdropBlurPx
+        set(value) {
+            backdropController.backdropBlurPx = value
+        }
+
+    var backdropCornerRadiusPx: Float
+        get() = backdropController.backdropCornerRadiusPx
+        set(value) {
+            backdropController.backdropCornerRadiusPx = value
+        }
+
+    var backdropOverlayDrawable: Drawable?
+        get() = backdropController.backdropOverlayDrawable
+        set(value) {
+            backdropController.backdropOverlayDrawable = value
+        }
+
     class LayoutParams : MarginLayoutParams {
         var weight: Float = 0f
         var fillWidth: Boolean = false
         var fillHeight: Boolean = false
         var alignSelf: AlignSelf? = null
+        var widthPercent: Float? = null
+        var heightPercent: Float? = null
+        var isLayerItem: Boolean = false
+        var layerFill: Boolean = false
+        var layerFloat: Boolean = false
+        var layerAlignment: LayerAlignment = LayerAlignment.TOP_START
+        var layerOffsetXPx: Int = 0
+        var layerOffsetYPx: Int = 0
+        var layerLeftPercent: Float? = null
+        var layerTopPercent: Float? = null
+        var layerRightPx: Int? = null
+        var layerBottomPx: Int? = null
+        var layerZIndex: Int = 0
+        var layerPassThrough: Boolean = false
 
         constructor(width: Int, height: Int) : super(width, height)
         constructor(source: ViewGroup.LayoutParams?) : super(source ?: MarginLayoutParams(WRAP_CONTENT, WRAP_CONTENT))
@@ -88,6 +167,20 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
                 it.fillWidth = p.fillWidth
                 it.fillHeight = p.fillHeight
                 it.alignSelf = p.alignSelf
+                it.widthPercent = p.widthPercent
+                it.heightPercent = p.heightPercent
+                it.isLayerItem = p.isLayerItem
+                it.layerFill = p.layerFill
+                it.layerFloat = p.layerFloat
+                it.layerAlignment = p.layerAlignment
+                it.layerOffsetXPx = p.layerOffsetXPx
+                it.layerOffsetYPx = p.layerOffsetYPx
+                it.layerLeftPercent = p.layerLeftPercent
+                it.layerTopPercent = p.layerTopPercent
+                it.layerRightPx = p.layerRightPx
+                it.layerBottomPx = p.layerBottomPx
+                it.layerZIndex = p.layerZIndex
+                it.layerPassThrough = p.layerPassThrough
             }
             is MarginLayoutParams -> LayoutParams(p)
             else -> LayoutParams(p)
@@ -100,14 +193,224 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
             child.layoutParams = it
         }
 
+    private fun isFillLayerChild(lp: LayoutParams): Boolean =
+        lp.layerFill || (!lp.layerFloat && (isRatioContainer || !lp.isLayerItem))
+
+    override fun getChildDrawingOrder(childCount: Int, drawingPosition: Int): Int {
+        if ((!isLayered && !isRatioContainer) || childCount <= 1) {
+            return super.getChildDrawingOrder(childCount, drawingPosition)
+        }
+        val ordered = (0 until childCount).sortedWith(
+            compareBy<Int>(
+                { getChildAt(it)?.let { child -> lpOf(child).layerZIndex } ?: 0 },
+                { it }
+            )
+        )
+        return ordered.getOrElse(drawingPosition) { drawingPosition }
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
+        if (pointerEventsNone) return false
+        return super.onInterceptTouchEvent(ev)
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        backdropController.release()
+    }
+
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        if (pointerEventsNone) return false
+        return super.onTouchEvent(event)
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        backdropController.drawBackdropIfActive(canvas)
+        backdropController.drawOverlayDrawable(canvas)
+        super.dispatchDraw(canvas)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        if (ev == null) return false
+        if (pointerEventsNone && alpha <= 0.01f) return false
+        if ((isLayered || isRatioContainer) && ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            for (i in 0 until childCount) {
+                val child = getChildAt(i) ?: continue
+                val lp = lpOf(child)
+                if (lp.layerPassThrough) {
+                    if (child is AndroidFlexContainerView) {
+                        child.pointerEventsNone = true
+                    } else if (child !is ViewGroup) {
+                        child.isClickable = false
+                        child.isLongClickable = false
+                    }
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val widthMode = MeasureSpec.getMode(widthMeasureSpec)
+        val widthSize = MeasureSpec.getSize(widthMeasureSpec)
+        val heightMode = MeasureSpec.getMode(heightMeasureSpec)
+        val effectiveHeightSpec = if (aspectRatio > 0f && widthMode != MeasureSpec.UNSPECIFIED && heightMode != MeasureSpec.EXACTLY) {
+            val padH = paddingLeft + paddingRight
+            val padV = paddingTop + paddingBottom
+            val innerW = (widthSize - padH).coerceAtLeast(0)
+            val rawHeight = (innerW / aspectRatio).roundToInt().coerceAtLeast(0) + padV
+            val resolvedHeight = if (heightMode == MeasureSpec.AT_MOST) {
+                rawHeight.coerceAtMost(MeasureSpec.getSize(heightMeasureSpec))
+            } else {
+                rawHeight
+            }
+            MeasureSpec.makeMeasureSpec(resolvedHeight, MeasureSpec.EXACTLY)
+        } else {
+            heightMeasureSpec
+        }
+
         val isRow = flexDirection == FlexDirection.ROW || flexDirection == FlexDirection.ROW_REVERSE
         val isWrapping = isRow && (flexWrap == FlexWrap.WRAP || flexWrap == FlexWrap.WRAP_REVERSE)
         when {
-            isWrapping -> measureWrappedRow(widthMeasureSpec, heightMeasureSpec)
-            isRow -> measureSingleRow(widthMeasureSpec, heightMeasureSpec)
-            else -> measureColumn(widthMeasureSpec, heightMeasureSpec)
+            isLayered || isRatioContainer -> measureLayered(widthMeasureSpec, effectiveHeightSpec)
+            isWrapping -> measureWrappedRow(widthMeasureSpec, effectiveHeightSpec)
+            isRow -> measureSingleRow(widthMeasureSpec, effectiveHeightSpec)
+            else -> measureColumn(widthMeasureSpec, effectiveHeightSpec)
         }
+    }
+
+    private fun measureLayered(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val widthMode = MeasureSpec.getMode(widthMeasureSpec)
+        val widthSize = MeasureSpec.getSize(widthMeasureSpec)
+        val heightMode = MeasureSpec.getMode(heightMeasureSpec)
+        val heightSize = MeasureSpec.getSize(heightMeasureSpec)
+
+        val padH = paddingLeft + paddingRight
+        val padV = paddingTop + paddingBottom
+        val availW = (widthSize - padH).coerceAtLeast(0)
+        val availH = (heightSize - padV).coerceAtLeast(0)
+
+        val selfLp = layoutParams as? LayoutParams
+        val selfFillsWidth = widthMode == MeasureSpec.EXACTLY ||
+            (widthMode == MeasureSpec.AT_MOST && (
+                aspectRatio > 0f ||
+                    isRatioContainer ||
+                    selfLp?.fillWidth == true ||
+                    layoutParams?.width == ViewGroup.LayoutParams.MATCH_PARENT
+                ))
+        val selfFillsHeight = heightMode == MeasureSpec.EXACTLY ||
+            (heightMode == MeasureSpec.AT_MOST && (
+                aspectRatio > 0f ||
+                    isRatioContainer ||
+                    selfLp?.fillHeight == true ||
+                    layoutParams?.height == ViewGroup.LayoutParams.MATCH_PARENT
+                ))
+
+        val visibleChildren = ArrayList<View>(childCount)
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c != null && c.visibility != View.GONE) {
+                visibleChildren.add(c)
+            }
+        }
+
+        if (visibleChildren.isEmpty()) {
+            val desiredW = if (selfFillsWidth && widthMode != MeasureSpec.UNSPECIFIED) widthSize else padH
+            val desiredH = if (selfFillsHeight && heightMode != MeasureSpec.UNSPECIFIED) heightSize else padV
+            setMeasuredDimension(
+                resolveSize(desiredW, widthMeasureSpec),
+                resolveSize(desiredH, heightMeasureSpec)
+            )
+            return
+        }
+
+        var maxChildW = 0
+        var maxChildH = 0
+        val fillChildren = ArrayList<View>()
+
+        for (child in visibleChildren) {
+            val lp = lpOf(child)
+            val cMarginH = lp.leftMargin + lp.rightMargin
+            val cMarginV = lp.topMargin + lp.bottomMargin
+
+            if (isFillLayerChild(lp)) {
+                fillChildren.add(child)
+                if (!selfFillsWidth || !selfFillsHeight) {
+                    val probeWSpec = when {
+                        selfFillsWidth && widthMode != MeasureSpec.UNSPECIFIED ->
+                            MeasureSpec.makeMeasureSpec((availW - cMarginH).coerceAtLeast(0), MeasureSpec.EXACTLY)
+                        lp.width > 0 -> MeasureSpec.makeMeasureSpec(lp.width, MeasureSpec.EXACTLY)
+                        widthMode != MeasureSpec.UNSPECIFIED ->
+                            MeasureSpec.makeMeasureSpec((availW - cMarginH).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                        else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+                    }
+                    val probeHSpec = when {
+                        selfFillsHeight && heightMode != MeasureSpec.UNSPECIFIED ->
+                            MeasureSpec.makeMeasureSpec((availH - cMarginV).coerceAtLeast(0), MeasureSpec.EXACTLY)
+                        lp.height > 0 -> MeasureSpec.makeMeasureSpec(lp.height, MeasureSpec.EXACTLY)
+                        heightMode != MeasureSpec.UNSPECIFIED ->
+                            MeasureSpec.makeMeasureSpec((availH - cMarginV).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                        else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+                    }
+                    child.measure(probeWSpec, probeHSpec)
+                    maxChildW = max(maxChildW, child.measuredWidth + cMarginH)
+                    maxChildH = max(maxChildH, child.measuredHeight + cMarginV)
+                }
+            } else {
+                val childWSpec = when {
+                    lp.width > 0 -> MeasureSpec.makeMeasureSpec(lp.width, MeasureSpec.EXACTLY)
+                    lp.widthPercent != null && widthMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec(
+                            ((availW * (lp.widthPercent!! / 100f)).roundToInt() - cMarginH).coerceAtLeast(0),
+                            MeasureSpec.EXACTLY
+                        )
+                    (lp.fillWidth || lp.width == ViewGroup.LayoutParams.MATCH_PARENT) && widthMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec((availW - cMarginH).coerceAtLeast(0), MeasureSpec.EXACTLY)
+                    widthMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec((availW - cMarginH).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                    else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+                }
+                val childHSpec = when {
+                    lp.height > 0 -> MeasureSpec.makeMeasureSpec(lp.height, MeasureSpec.EXACTLY)
+                    lp.heightPercent != null && heightMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec(
+                            ((availH * (lp.heightPercent!! / 100f)).roundToInt() - cMarginV).coerceAtLeast(0),
+                            MeasureSpec.EXACTLY
+                        )
+                    (lp.fillHeight || lp.height == ViewGroup.LayoutParams.MATCH_PARENT) && heightMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec((availH - cMarginV).coerceAtLeast(0), MeasureSpec.EXACTLY)
+                    heightMode != MeasureSpec.UNSPECIFIED ->
+                        MeasureSpec.makeMeasureSpec((availH - cMarginV).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                    else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+                }
+                child.measure(childWSpec, childHSpec)
+                maxChildW = max(maxChildW, child.measuredWidth + cMarginH)
+                maxChildH = max(maxChildH, child.measuredHeight + cMarginV)
+            }
+        }
+
+        val targetInnerW = if (selfFillsWidth && widthMode != MeasureSpec.UNSPECIFIED) availW else maxChildW
+        val targetInnerH = if (selfFillsHeight && heightMode != MeasureSpec.UNSPECIFIED) availH else maxChildH
+
+        for (child in fillChildren) {
+            val lp = lpOf(child)
+            val cMarginH = lp.leftMargin + lp.rightMargin
+            val cMarginV = lp.topMargin + lp.bottomMargin
+            val fillW = (targetInnerW - cMarginH).coerceAtLeast(0)
+            val fillH = (targetInnerH - cMarginV).coerceAtLeast(0)
+            child.measure(
+                MeasureSpec.makeMeasureSpec(fillW, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(fillH, MeasureSpec.EXACTLY)
+            )
+        }
+
+        val desiredW = if (selfFillsWidth && widthMode != MeasureSpec.UNSPECIFIED) widthSize else targetInnerW + padH
+        val desiredH = if (selfFillsHeight && heightMode != MeasureSpec.UNSPECIFIED) heightSize else targetInnerH + padV
+
+        setMeasuredDimension(
+            resolveSize(desiredW, widthMeasureSpec),
+            resolveSize(desiredH, heightMeasureSpec)
+        )
     }
 
     private fun measureColumn(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -153,7 +456,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
                     (!parentIsRow && alignItems == AlignItems.STRETCH)
                 ))
         val selfFillsHeight = heightMode == MeasureSpec.EXACTLY ||
-            (heightMode == MeasureSpec.AT_MOST && (
+            (heightMode == MeasureSpec.AT_MOST && !parentIsRow && (
                 selfLp?.fillHeight == true ||
                     layoutParams?.height == ViewGroup.LayoutParams.MATCH_PARENT
                 ))
@@ -453,9 +756,79 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         val isRow = flexDirection == FlexDirection.ROW || flexDirection == FlexDirection.ROW_REVERSE
         val isWrapping = isRow && (flexWrap == FlexWrap.WRAP || flexWrap == FlexWrap.WRAP_REVERSE)
         when {
+            isLayered || isRatioContainer -> layoutLayered(r - l, b - t)
             isWrapping -> layoutWrappedRow(r - l)
             isRow -> layoutSingleRow(r - l, b - t)
             else -> layoutColumn(r - l, b - t)
+        }
+    }
+
+    private fun layoutLayered(containerW: Int, containerH: Int) {
+        val innerW = (containerW - paddingLeft - paddingRight).coerceAtLeast(0)
+        val innerH = (containerH - paddingTop - paddingBottom).coerceAtLeast(0)
+
+        for (i in 0 until childCount) {
+            val child = getChildAt(i) ?: continue
+            if (child.visibility == View.GONE) continue
+            val lp = lpOf(child)
+            child.translationZ = lp.layerZIndex.toFloat()
+
+            if (isFillLayerChild(lp)) {
+                val left = paddingLeft + lp.leftMargin + lp.layerOffsetXPx
+                val top = paddingTop + lp.topMargin + lp.layerOffsetYPx
+                val right = (left + innerW - lp.leftMargin - lp.rightMargin).coerceAtLeast(left)
+                val bottom = (top + innerH - lp.topMargin - lp.bottomMargin).coerceAtLeast(top)
+                child.layout(left, top, right, bottom)
+            } else {
+                val cw = child.measuredWidth
+                val ch = child.measuredHeight
+
+                val leftPct = lp.layerLeftPercent
+                val rightPx = lp.layerRightPx
+                val x = when {
+                    leftPct != null -> {
+                        val baseX = paddingLeft + (innerW * (leftPct.coerceIn(0f, 100f) / 100f)).roundToInt() + lp.layerOffsetXPx
+                        when (lp.layerAlignment) {
+                            LayerAlignment.TOP_CENTER, LayerAlignment.CENTER, LayerAlignment.BOTTOM_CENTER -> baseX - (cw / 2)
+                            LayerAlignment.TOP_END, LayerAlignment.CENTER_END, LayerAlignment.BOTTOM_END -> baseX - cw
+                            else -> baseX
+                        }
+                    }
+                    rightPx != null -> paddingLeft + innerW - cw - rightPx + lp.layerOffsetXPx - lp.rightMargin
+                    else -> when (lp.layerAlignment) {
+                        LayerAlignment.TOP_START, LayerAlignment.CENTER_START, LayerAlignment.BOTTOM_START ->
+                            paddingLeft + lp.leftMargin + lp.layerOffsetXPx
+                        LayerAlignment.TOP_CENTER, LayerAlignment.CENTER, LayerAlignment.BOTTOM_CENTER ->
+                            paddingLeft + ((innerW - cw) / 2) + lp.layerOffsetXPx
+                        LayerAlignment.TOP_END, LayerAlignment.CENTER_END, LayerAlignment.BOTTOM_END ->
+                            paddingLeft + innerW - cw - lp.rightMargin + lp.layerOffsetXPx
+                    }
+                }
+
+                val topPct = lp.layerTopPercent
+                val bottomPx = lp.layerBottomPx
+                val y = when {
+                    topPct != null -> {
+                        val baseY = paddingTop + (innerH * (topPct.coerceIn(0f, 100f) / 100f)).roundToInt() + lp.layerOffsetYPx
+                        when (lp.layerAlignment) {
+                            LayerAlignment.CENTER_START, LayerAlignment.CENTER, LayerAlignment.CENTER_END -> baseY - (ch / 2)
+                            LayerAlignment.BOTTOM_START, LayerAlignment.BOTTOM_CENTER, LayerAlignment.BOTTOM_END -> baseY - ch
+                            else -> baseY
+                        }
+                    }
+                    bottomPx != null -> paddingTop + innerH - ch - bottomPx + lp.layerOffsetYPx - lp.bottomMargin
+                    else -> when (lp.layerAlignment) {
+                        LayerAlignment.TOP_START, LayerAlignment.TOP_CENTER, LayerAlignment.TOP_END ->
+                            paddingTop + lp.topMargin + lp.layerOffsetYPx
+                        LayerAlignment.CENTER_START, LayerAlignment.CENTER, LayerAlignment.CENTER_END ->
+                            paddingTop + ((innerH - ch) / 2) + lp.layerOffsetYPx
+                        LayerAlignment.BOTTOM_START, LayerAlignment.BOTTOM_CENTER, LayerAlignment.BOTTOM_END ->
+                            paddingTop + innerH - ch - lp.bottomMargin + lp.layerOffsetYPx
+                    }
+                }
+
+                child.layout(x, y, x + cw, y + ch)
+            }
         }
     }
 
@@ -665,6 +1038,20 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
             lp.weight = handle.layoutWeight
             lp.fillWidth = handle.fillMaxWidth || handle.attributes["layoutWidth"] == "MATCH_PARENT"
             lp.fillHeight = handle.fillMaxHeight || handle.attributes["layoutHeight"] == "MATCH_PARENT"
+            lp.widthPercent = handle.widthPercent
+            lp.heightPercent = handle.heightPercent
+            lp.isLayerItem = handle.isLayerItem
+            lp.layerFill = handle.layerFill
+            lp.layerFloat = handle.layerFloat
+            lp.layerAlignment = handle.layerAlignment
+            lp.layerOffsetXPx = AndroidViewHandle.dpToPx(handle.layerOffsetXPx)
+            lp.layerOffsetYPx = AndroidViewHandle.dpToPx(handle.layerOffsetYPx)
+            lp.layerLeftPercent = handle.layerLeftPercent
+            lp.layerTopPercent = handle.layerTopPercent
+            lp.layerRightPx = handle.layerRightPx?.let { AndroidViewHandle.dpToPx(it) }
+            lp.layerBottomPx = handle.layerBottomPx?.let { AndroidViewHandle.dpToPx(it) }
+            lp.layerZIndex = handle.layerZIndex
+            lp.layerPassThrough = handle.layerPassThrough
             lp.width = when {
                 lp.fillWidth -> ViewGroup.LayoutParams.MATCH_PARENT
                 handle.hasExplicitPreferredWidth && handle.bounds.width > 0 ->

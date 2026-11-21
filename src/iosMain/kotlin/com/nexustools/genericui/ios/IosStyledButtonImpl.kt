@@ -54,6 +54,7 @@ class IosStyledButtonImpl(
     private var activeVisuals: StyledVisualSpec? = null
     private var disabledVisuals: StyledVisualSpec? = null
     private var gradientLayer: CAGradientLayer? = null
+    private val backdropController = UikitBackdropBlurController(button)
 
     init {
         button.addTarget(
@@ -140,7 +141,7 @@ class IosStyledButtonImpl(
     override fun resolveCurrentVisuals(): StyledVisualSpec {
         var resolved = baseVisuals
         if (!isEnabled() && disabledVisuals != null) {
-            return resolved.mergeWith(disabledVisuals)
+            return resolved.mergeWith(disabledVisuals).forBackend(layoutTarget)
         }
         if (isHoveredState() && hoverVisuals != null) {
             resolved = resolved.mergeWith(hoverVisuals)
@@ -223,5 +224,15 @@ class IosStyledButtonImpl(
             layer.startPoint = CGPointMake(0.5 - dx, 0.5 - dy)
             layer.endPoint = CGPointMake(0.5 + dx, 0.5 + dy)
         }
+        backdropController.apply(
+            visuals = v,
+            cornerRadiusPt = button.layer.cornerRadius,
+            clipsToBounds = button.clipsToBounds
+        )
+    }
+
+    override fun dispose() {
+        backdropController.clear()
+        super.dispose()
     }
 }

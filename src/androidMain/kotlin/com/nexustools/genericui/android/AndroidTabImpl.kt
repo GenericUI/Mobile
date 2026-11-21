@@ -88,6 +88,7 @@ class AndroidTabImpl(
 
     override fun createDefaultAndroidView(context: Context): View {
         val row = LinearLayout(context).apply {
+            visibility = View.GONE
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val padH = AndroidViewHandle.dpToPx(8)
@@ -381,6 +382,10 @@ class AndroidTabImpl(
         super.syncAndroidView()
         AndroidViewHandle.runOnMainThread {
             runCatching {
+                val row = rootTabRow ?: (nativeWidget.androidView as? LinearLayout)
+                if (row != null && row.parent is AndroidFlexContainerView) {
+                    row.visibility = View.GONE
+                }
                 val ctx = (nativeWidget.androidView?.context) ?: AndroidViewHandle.activeContext
                 val isDark = AndroidViewHandle.isDarkTheme()
                 val textColor = if (selectedVal) {

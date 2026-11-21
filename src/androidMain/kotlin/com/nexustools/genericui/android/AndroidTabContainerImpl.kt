@@ -250,10 +250,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         }
         AndroidViewHandle.runOnMainThread {
             runCatching {
-                for (tabImpl in tabImpls) {
-                    val tabView = (tabImpl?.nativeWidget as? AndroidViewHandle)?.androidView
-                    tabView?.visibility = View.GONE
-                }
+                hideTabPlaceholderViews()
             }
             rebuildHeaderButtons()
         }
@@ -715,8 +712,28 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         return chip
     }
 
+    private fun hideTabPlaceholderViews() {
+        for (tabImpl in tabImpls) {
+            val tabView = (tabImpl?.nativeWidget as? AndroidViewHandle)?.androidView
+            if (tabView != null && tabView.visibility != View.GONE) {
+                tabView.visibility = View.GONE
+            }
+        }
+    }
+
+    override fun ensureAndroidView(context: Context?): View? {
+        val view = super.ensureAndroidView(context)
+        AndroidViewHandle.runOnMainThread {
+            runCatching { hideTabPlaceholderViews() }
+        }
+        return view
+    }
+
     override fun syncAndroidView() {
         super.syncAndroidView()
+        AndroidViewHandle.runOnMainThread {
+            runCatching { hideTabPlaceholderViews() }
+        }
         rebuildHeaderButtons()
     }
 }

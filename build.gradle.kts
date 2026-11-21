@@ -11,7 +11,9 @@ kotlin {
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
 
-        withHostTest {}
+        withHostTest {
+            isIncludeAndroidResources = true
+        }
 
         compilerOptions {
             jvmTarget = JvmTarget.JVM_11
@@ -68,6 +70,7 @@ kotlin {
             dependsOn(commonTest)
             dependencies {
                 implementation(libs.kotlin.testJunit)
+                implementation("org.robolectric:robolectric:4.16.1")
             }
         }
 

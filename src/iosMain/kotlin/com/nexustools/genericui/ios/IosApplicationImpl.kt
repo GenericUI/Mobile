@@ -58,12 +58,15 @@ class IosApplicationImpl(
         installSystemThemeHooks()
         applyUserInterfaceStyle(themeMode)
         activeInstance = this
+        UikitExtensionLifecycleBridge.ensureNotificationObserversInstalled()
+        UikitExtensionLifecycleBridge.dispatchApplicationLaunched()
         memoryWarningObserver = NSNotificationCenter.defaultCenter.addObserverForName(
             name = UIApplicationDidReceiveMemoryWarningNotification,
             `object` = null,
             queue = NSOperationQueue.mainQueue
         ) { _ ->
             lifecycleBridge.dispatchLowMemoryWarning(trimLevel = 1)
+            UikitExtensionLifecycleBridge.dispatchLowMemoryWarning()
         }
     }
 

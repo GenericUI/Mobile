@@ -29,6 +29,7 @@ open class GenericUiAndroidApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initializeGenericUi(runCatching { applicationContext }.getOrNull() ?: this)
+        AndroidExtensionRuntimeBridge.notifyApplicationCreate(this)
     }
 
     /**

@@ -3,6 +3,7 @@ package com.nexustools.genericui.android
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import com.nexustools.genericui.component.layout.LayerAlignment
 import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
@@ -20,7 +21,7 @@ import kotlin.math.roundToInt
  */
 class AndroidViewHandle(
     val viewClassName: String = "android.view.View",
-    var androidView: View? = null
+    @field:Volatile var androidView: View? = null
 ) {
     var tagId: String = ""
     var text: String = ""
@@ -48,6 +49,23 @@ class AndroidViewHandle(
     var maxLines: Int = Int.MAX_VALUE
     var hasExplicitPreferredWidth: Boolean = false
     var hasExplicitPreferredHeight: Boolean = false
+    var aspectRatio: Float = 0f
+    var isLayeredContainer: Boolean = false
+    var isRatioContainer: Boolean = false
+    var isLayerItem: Boolean = false
+    var layerFill: Boolean = false
+    var layerFloat: Boolean = false
+    var layerAlignment: LayerAlignment = LayerAlignment.TOP_START
+    var layerOffsetXPx: Int = 0
+    var layerOffsetYPx: Int = 0
+    var layerLeftPercent: Float? = null
+    var layerTopPercent: Float? = null
+    var layerRightPx: Int? = null
+    var layerBottomPx: Int? = null
+    var layerZIndex: Int = 0
+    var layerPassThrough: Boolean = false
+    var widthPercent: Float? = null
+    var heightPercent: Float? = null
     var onViewMutated: (() -> Unit)? = null
 
     /**
@@ -56,15 +74,27 @@ class AndroidViewHandle(
      */
     var childHostViewGroup: ViewGroup? = null
 
+    @Volatile
+    var disposed: Boolean = false
+
+    @Volatile
     var parentHandle: AndroidViewHandle? = null
         private set
 
+    private val childrenLock = Any()
     private val _children = mutableListOf<AndroidViewHandle>()
     val children: List<AndroidViewHandle>
-        get() = _children
+        get() = synchronized(childrenLock) { _children.toList() }
+
+    internal fun attachChildHandleOnMainThread(child: AndroidViewHandle) {
+        attachChildViewOnMainThread(child)
+    }
 
     private fun attachChildViewOnMainThread(child: AndroidViewHandle) {
-        if (child.parentHandle !== this || !_children.contains(child)) return
+        val isLiveChild = synchronized(childrenLock) {
+            !disposed && !child.disposed && child.parentHandle === this && _children.contains(child)
+        }
+        if (!isLiveChild) return
         val vg = childHostViewGroup ?: (androidView as? ViewGroup) ?: return
         val cv = child.androidView ?: return
         if (vg === cv) return
@@ -94,26 +124,42 @@ class AndroidViewHandle(
                 )
             }
         }
-        if (cv.parent !== vg) {
+        val isHostedInActivity = (cv.parent as? View)?.getTag(GenericUiFragmentActivity.TAG_ACTIVITY_CONTENT_HOST) == true
+        val needsReattach = cv.parent === vg && vg.isAttachedToWindow && !cv.isAttachedToWindow
+        if (needsReattach) {
+            vg.removeView(cv)
+        }
+        if ((cv.parent !== vg || needsReattach) && !isHostedInActivity) {
             (cv.parent as? ViewGroup)?.removeView(cv)
-            val logicalIdx = _children.indexOf(child)
-            val insertIdx = if (logicalIdx < 0) vg.childCount else logicalIdx.coerceIn(0, vg.childCount)
+            val logicalIdx = synchronized(childrenLock) {
+                if (disposed || child.disposed || child.parentHandle !== this) -1 else _children.indexOf(child)
+            }
+            if (logicalIdx < 0) return
+            val insertIdx = logicalIdx.coerceIn(0, vg.childCount)
             vg.addView(cv, insertIdx, lp)
-        } else {
+        } else if (cv.parent === vg) {
             cv.layoutParams = lp
         }
-        for (grandChild in child._children.toList()) {
+        val grandChildren = synchronized(child.childrenLock) { child._children.toList() }
+        for (grandChild in grandChildren) {
             child.attachChildViewOnMainThread(grandChild)
         }
+        vg.requestLayout()
+        vg.invalidate()
     }
 
     fun addChild(child: AndroidViewHandle, index: Int = -1) {
+        if (disposed || child.disposed) return
         child.removeFromParent()
-        child.parentHandle = this
-        if (index < 0 || index >= _children.size) {
-            _children.add(child)
-        } else {
-            _children.add(index, child)
+        synchronized(childrenLock) {
+            if (disposed || child.disposed) return
+            child.parentHandle = this
+            _children.remove(child)
+            if (index < 0 || index >= _children.size) {
+                _children.add(child)
+            } else {
+                _children.add(index, child)
+            }
         }
         runOnMainThread {
             runCatching {
@@ -124,8 +170,17 @@ class AndroidViewHandle(
     }
 
     fun removeChild(child: AndroidViewHandle) {
-        if (_children.remove(child)) {
-            child.parentHandle = null
+        val removed = synchronized(childrenLock) {
+            if (_children.remove(child)) {
+                if (child.parentHandle === this) {
+                    child.parentHandle = null
+                }
+                true
+            } else {
+                false
+            }
+        }
+        if (removed) {
             runOnMainThread {
                 runCatching {
                     if (child.parentHandle !== this) {
@@ -145,17 +200,27 @@ class AndroidViewHandle(
         parentHandle?.removeChild(this)
     }
 
+    fun dispose() {
+        disposed = true
+        removeFromParent()
+    }
+
     fun clearChildren() {
-        for (c in _children) {
-            c.parentHandle = null
+        synchronized(childrenLock) {
+            for (c in _children) {
+                if (c.parentHandle === this) {
+                    c.parentHandle = null
+                }
+            }
+            _children.clear()
         }
-        _children.clear()
         runOnMainThread {
             runCatching {
                 val vg = childHostViewGroup ?: (androidView as? ViewGroup)
                 if (vg != null) {
                     vg.removeAllViews()
-                    for (c in _children.toList()) {
+                    val snapshot = synchronized(childrenLock) { _children.toList() }
+                    for (c in snapshot) {
                         attachChildViewOnMainThread(c)
                     }
                 }
@@ -165,16 +230,26 @@ class AndroidViewHandle(
     }
 
     companion object {
+        @Volatile
         var activeContext: Context? = null
 
         @Volatile
         private var cachedMainHandler: android.os.Handler? = null
 
         private fun obtainMainHandler(looper: android.os.Looper): android.os.Handler? {
-            cachedMainHandler?.let { return it }
+            val existing = cachedMainHandler
+            if (existing != null && runCatching { existing.looper === looper }.getOrDefault(false)) {
+                return existing
+            }
             return runCatching {
                 android.os.Handler(looper).also { cachedMainHandler = it }
             }.getOrNull()
+        }
+
+        fun isOnMainThread(): Boolean {
+            val looper = runCatching { android.os.Looper.getMainLooper() }.getOrNull()
+            val looperThread: Thread? = runCatching { looper?.thread }.getOrNull()
+            return looper == null || looperThread == null || looperThread === Thread.currentThread()
         }
 
         fun runOnMainThread(block: () -> Unit) {
@@ -189,6 +264,17 @@ class AndroidViewHandle(
                 } else if (activeContext == null) {
                     block()
                 }
+            }
+        }
+
+        fun dispatchOnLogicThread(block: () -> Unit) {
+            if (com.nexustools.genericui.core.GenericUI.activeFactory != null &&
+                com.nexustools.genericui.threading.GenericUiThreading.isSplitThreadingEnabled &&
+                !com.nexustools.genericui.threading.GenericUiThreading.isOnLogicThread()
+            ) {
+                com.nexustools.genericui.threading.GenericUiThreading.runOnLogic(block)
+            } else {
+                block()
             }
         }
 

@@ -22,9 +22,6 @@ import platform.Foundation.numberWithDouble
 import platform.QuartzCore.CAGradientLayer
 import platform.QuartzCore.kCAGradientLayerAxial
 import platform.QuartzCore.kCAGradientLayerRadial
-import platform.UIKit.UIBlurEffect
-import platform.UIKit.UIBlurEffectStyle
-import platform.UIKit.UIVisualEffectView
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -47,10 +44,19 @@ class IosStyledContainerImpl(
 
     private var currentVisuals: StyledVisualSpec = StyledVisualSpec()
     private var gradientLayer: CAGradientLayer? = null
-    private var blurEffectView: UIVisualEffectView? = null
+    private val backdropController = UikitBackdropBlurController(uiView)
+
+    private fun isTextBubbleComponent(): Boolean {
+        val tokens = componentClassPrefix.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return tokens.any { token ->
+            val norm = token.removePrefix("genericui:")
+            norm == "text-bubble" || norm == "textbubble" || norm == "gui-text-bubble"
+        }
+    }
 
     override fun setStyledVisuals(visuals: StyledVisualSpec) {
-        currentVisuals = visuals.forBackend(layoutTarget)
+        val backend = visuals.forBackend(layoutTarget)
+        currentVisuals = if (isTextBubbleComponent()) backend.withoutBackdropFilter() else backend
         applyStyledVisuals()
     }
 
@@ -89,8 +95,7 @@ class IosStyledContainerImpl(
             }
         }
         applyGradientLayer(v.backgroundGradient ?: getBackgroundGradient())
-        val blurPx = v.backdropBlurPx ?: v.backdropFilter?.blur?.value
-        applyBackdropBlur(blurPx)
+        applyBackdropBlur(v)
     }
 
     private fun applyGradientLayer(gradient: Gradient?) {
@@ -129,25 +134,20 @@ class IosStyledContainerImpl(
         }
     }
 
-    private fun applyBackdropBlur(blurPx: Float?) {
-        if (blurPx == null || blurPx <= 0f) {
-            blurEffectView?.removeFromSuperview()
-            blurEffectView = null
+    private fun applyBackdropBlur(visuals: StyledVisualSpec) {
+        if (isTextBubbleComponent()) {
+            backdropController.clear()
             return
         }
-        val style = if (UikitGeometryAndColorUtil.isDarkActive()) {
-            UIBlurEffectStyle.UIBlurEffectStyleDark
-        } else {
-            UIBlurEffectStyle.UIBlurEffectStyleLight
-        }
-        val effect = UIBlurEffect.effectWithStyle(style)
-        val view = blurEffectView ?: UIVisualEffectView(effect = effect).also {
-            uiView.insertSubview(it, atIndex = 0L)
-            blurEffectView = it
-        }
-        view.effect = effect
-        view.setFrame(uiView.bounds)
-        view.layer.cornerRadius = uiView.layer.cornerRadius
-        view.clipsToBounds = uiView.clipsToBounds
+        backdropController.apply(
+            visuals = visuals,
+            cornerRadiusPt = uiView.layer.cornerRadius,
+            clipsToBounds = uiView.clipsToBounds
+        )
+    }
+
+    override fun dispose() {
+        backdropController.clear()
+        super.dispose()
     }
 }

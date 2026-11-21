@@ -13,7 +13,6 @@ import com.nexustools.genericui.jvm.JvmDatabaseBase
 import com.nexustools.genericui.jvm.JvmFileSystemBase
 import com.nexustools.genericui.jvm.JvmHttpUrlConnectionClient
 import com.nexustools.genericui.jvm.JvmImageCodecBase
-import com.nexustools.genericui.jvm.JvmPreferenceStoreBase
 import com.nexustools.genericui.jvm.JvmResourceResolverBase
 import com.nexustools.genericui.jvm.JvmRfc6455WebSocketNativeImpl
 import com.nexustools.genericui.jvm.JvmStreamFileReadableNativeImpl
@@ -21,6 +20,7 @@ import com.nexustools.genericui.jvm.JvmStreamFileWritableNativeImpl
 import com.nexustools.genericui.jvm.JvmTcpSocketNativeImpl
 import com.nexustools.genericui.jvm.JvmUdpSocketNativeImpl
 import com.nexustools.genericui.jvm.JvmUiThreadDispatcherBase
+import com.nexustools.genericui.nativeimpl.system.PreferenceStoreNativeImpl
 import com.nexustools.genericui.style.color.RgbaColor
 import com.nexustools.genericui.style.css.CssFilter
 import com.nexustools.genericui.window.TitleBar
@@ -57,8 +57,8 @@ class AndroidJvmInheritanceAndWidgetsTest {
         assertTrue(fs is JvmFileSystemBase)
         assertTrue(readable is JvmStreamFileReadableNativeImpl)
         assertTrue(writable is JvmStreamFileWritableNativeImpl)
-        assertTrue(prefs is JvmPreferenceStoreBase)
-        assertFalse(prefs.useBinaryPlist)
+        assertTrue(prefs is AndroidPreferenceStoreImpl)
+        assertTrue(prefs is PreferenceStoreNativeImpl)
         assertTrue(db is JvmDatabaseBase)
         assertTrue(res is JvmResourceResolverBase)
 

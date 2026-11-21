@@ -1,64 +1,57 @@
-# `:mobile` — Mobile Backends (`:mobile:common`, `:mobile:android`, `:mobile:ios`)
+# `:mobile` — Consolidated Mobile Backends (`Android`, `IOS`, `IPadOS`)
+
+> **Root Repository**: [**GenericUI (`../README.md`)**](../README.md) | **Related Guides**: [Platform Backends (`../docs/backends.md`)](../docs/backends.md) · [iPadOS Backend (`../docs/ipados.md`)](../docs/ipados.md) · [`:apple` (`../docs/apple.md`)](../docs/apple.md) · [`:jvm` (`../docs/jvm.md`)](../docs/jvm.md) · [`:system` (`../system/README.md`)](../system/README.md)
 
 ## Overview
-The `:mobile` module hierarchy provides native mobile UI backends for **Android** (`androidMain` — Android Views + Material Components) and **iOS** (`iosX64`, `iosArm64`, `iosSimulatorArm64` — UIKit), built on top of `:common`, `:systemCommon`, and `:mobile:common`.
+The consolidated **`:mobile`** module (`mobile/build.gradle.kts`) provides all three mobile backends for GenericUI—**Android (`Android`)**, **iPhone iOS (`IOS`)**, and **iPad iPadOS (`IPadOS`)**—built atop `:common`, `:system`, [`:jvm`](../docs/jvm.md) (`androidMain`), and [`:apple`](../docs/apple.md) (`iosMain`).
 
 ---
 
-## Module Hierarchy
+## SourceSet Hierarchy inside `:mobile`
 
 ```text
 :common
-  └── :systemCommon
-        └── :mobile:common (commonMain: MobileBaseNativeImpl, MobileLazyViewportEngine, MobileWindowNativeImpl, etc.)
-              ├── :mobile:android (androidMain: AndroidLauncher, GenericUiFragmentActivity, AndroidBaseNativeImpl)
-              └── :mobile:ios     (iosMain: IosLauncher, UIKit UIViewController / UIView, IosBaseNativeImpl)
+  └── :system
+        └── :mobile (commonMain / mobileCommon)      — Form factor, gesture, fling, PiP, & lazy viewport pool
+              ├── androidMain  (Android + :jvm)     — Android Views, Material, Hardware RenderEffect blur, FGS ServiceWorker
+              └── iosMain      (IOS & IPadOS + :apple) — UIKit single-window iPhone (`ios/*`) & multi-window iPadOS (`ipados/*`)
 ```
 
-| Submodule | Targets | Documentation |
-|-----------|---------|---------------|
-| [`:mobile:common`](common/README.md) | `jvm`/`androidTarget`, `iosX64`, `iosArm64`, `iosSimulatorArm64` | [docs/common.md](docs/common.md) |
-| [`:mobile:android`](android/README.md) | `androidTarget` (`androidMain`) | [docs/android.md](docs/android.md) |
-| [`:mobile:ios`](ios/README.md) | `iosX64`, `iosArm64`, `iosSimulatorArm64` | [docs/ios.md](docs/ios.md) |
+| Source Set | Backend Targets | Key Responsibilities | Documentation |
+|-----------|-----------------|----------------------|---------------|
+| **`commonMain`** (`mobileCommon`) | `android`, `iosArm64`, `iosSimulatorArm64` | Responsive breakpoints (`MobileDeviceFormFactor`, `MobileAdaptiveFragmentCoordinator`, `MobileLayoutFactory`), gesture/fling physics, lifecycle bridge (`MobileLifecycleBridge`), safe-area/posture tracking, and `MobileLazyViewportPool` | [`docs/common.md`](docs/common.md) · [`docs/shared.md`](docs/shared.md) |
+| **`androidMain`** | **`Android`** | `AppCompatActivity` per `@MainAppFragment`/`@AppFragment`, `AndroidExtensionRuntimeBridge`, `AndroidHardwareBackdropBlurController`, `GeneratedAndroidServiceWorkerService` / `AndroidServiceWorkerController`, 16KB ELF/ZIP `.so` alignment, `AndroidLazyListImpl`, `AndroidUdpSocketNativeImpl` (`MulticastLock`), `AndroidBaseContainerNativeImpl`, `AndroidViewHandle`, shared `:jvm` stack | [`docs/android.md`](docs/android.md) |
+| **`iosMain` (`ios/*` & `ipados/*`)** | **`IOS`** (`UIDeviceFamily = 1`) & **`IPadOS`** (`UIDeviceFamily = 2`) | UIKit controls (`IosBaseNativeImpl`), `UikitBackdropBlurController` (Metal `CABackdropLayer` + `UIVisualEffectView`), single-window `IosLauncher` vs. multi-window Stage Manager `IpadosLauncher`/`IpadosSceneDelegate`/`IpadosWindowImpl`/`UIMenuSystem`, shared `:apple` stack, and `ServiceWorkerExtension.isSupported == false` (zero simulation) | [`docs/ios.md`](docs/ios.md) · [`../docs/ipados.md`](../docs/ipados.md) |
 
 ---
 
-## Native Mobile Control Rendering (`BootstrapType.NONE`), Native Control Tinting + `ThemeConfig` (`BootstrapType != NONE`), & System Style Restraints
+## 60+Hz Hardware `backdrop-filter` (`StyledButton` & `StyledContainer`, Excluding `TextBubble`)
 
-1. **`BootstrapType.NONE` (`BootstrapType.None`) Default — 100% Unmodified Native Mobile Controls**:
-   - Native mobile applications **never** apply Bootstrap CSS styling to native controls.
-   - When `component.getBootstrap().type == BootstrapType.NONE` (the default), `:mobile:android` and `:mobile:ios` render the **100% unmodified genuine OS system control** (`MaterialButton` / `AppCompatEditText` / `SwitchMaterial` restoring `defaultNativeBackground` on Android; `UIButton` / `UITextField` / `UISwitch` / `UISlider` on iOS) for the active `LIGHT` / `DARK` theme.
-2. **`BootstrapType != BootstrapType.NONE` — Native Control Tinting via `ThemeConfig` + Contrasting Text**:
-   - When `BootstrapType != BootstrapType.NONE` (`PRIMARY`, `SECONDARY`, `SUCCESS`, `DANGER`, `WARNING`, `INFO`, `LIGHT`, `DARK`), `:mobile:android` and `:mobile:ios` tint the native control drawable (`ViewCompat.setBackgroundTintList(view, ColorStateList.valueOf(tintColor))` on Android; `UIButton.Configuration` / `tintColor` on iOS) using the resolved `ThemeConfig` / `BootstrapColorPalette` color while preserving native Material elevation, ripples, borders, and hover/pressed/disabled states, and render contrasting text on top (`outline = true/false`).
-3. **System Backend Typography vs. Aesthetic Style Restraints**:
-   - **Text / Typography Elements (`Label`, `Text`, `Heading`, `Badge`, `Blockquote`, `CodeBlock`, `MarkdownView`)**: Honor typography and text-color properties (`color` / `textColor`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `textAlign`, `textDecoration`, `textTransform`, `textOverflow`, `whiteSpace`, `wordBreak`, plus `bootstrap.textColorType`, `bootstrap.fontSize`, `bootstrap.fontWeight`, `bootstrap.textAlignment`).
-   - **Buttons, Inputs, Controls, & Standard Containers (`Button`, `IconButton`, `ToggleButton`, `CheckBox`, `RadioButton`, `Switch`, `Select`, `DropdownButton`, `TextField`, `TextArea`, `RangeSlider`, `ProgressBar`, `Spinner`, `TabContainer`, `Tab`, `Container`, `Card`, etc.)**: Aesthetic skinning and typography overrides on `ComponentStyle` (`backgroundColor`, `background`, `color`, `accentColor`, `borderColor`, `borderWidth`, `borderStyle`, `borderRadius`, `boxShadow`, `textShadow`, `filter`, `backdropFilter`, `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`) are **silently ignored** on mobile backends. Standard components can **ONLY** be tinted via `BootstrapType`.
-   - **`StyledContainer` & `StyledButton` (and [`:extensions:alien`](../extensions/docs/alien.md))**: Honor full `ComponentStyle` aesthetic and typography properties across all backends.
-4. **Strict User CSS Class Isolation**:
-   - In `MobileBaseNativeImpl`, `AndroidBaseNativeImpl`, and `IosBaseNativeImpl`, `addClass`, `removeClass`, `hasClass`, `getClasses()`, and `getClass()` return **only** user-added custom classes (`styleSnapshot.customClasses`). `ComponentBootstrap` (`getBootstrap()`) enum utilities are executed directly by the native Android and iOS layout/rendering engines.
+- **Android (`AndroidHardwareBackdropBlurController`)**: Hosted by `AndroidFlexContainerView` (`AndroidStyledContainerImpl`) and `AndroidStyledButtonView` (`AndroidStyledButtonImpl`). Walks up to the nearest backdrop root (`android.R.id.content` or outermost host above `DecorView`), draws strictly pre-order preceding branches in `layerZIndex` order, captures live `TextureView` frames via `SurfaceTextureListener` (`onSurfaceTextureUpdated` -> `postInvalidateOnAnimation()`), and applies **API 31+ hardware `RenderNode` / `RenderEffect.createBlurEffect`** + `ColorMatrixColorFilter` at 60–120Hz (falling back cleanly on API 24–30 and Robolectric to downsampled `Bitmap` + `FastBackdropBlurKernel`).
+- **iOS & iPadOS (`UikitBackdropBlurController`)**: Shared across `IosStyledContainerImpl` and `IosStyledButtonImpl` on both `IOS` and `IPadOS`. Mounts a Metal-backed `UIVisualEffectView` (`CABackdropLayer`) driven by a paused `UIViewPropertyAnimator` `fractionComplete` radius curve plus `tintOverlayView` while keeping `hostView.backgroundColor = UIColor.clearColor`.
+- [`TextBubble`](../extensions/docs/aichat.md) explicitly strips `backdropFilter` via `isTextBubbleComponent()` -> `withoutBackdropFilter()`.
 
 ---
 
-## Precompiled `.scss` Stylesheets & `IApplication` Theming (`ThemeMode.AUTO`)
+## Mobile `ServiceWorker` Policy & Lifecycle Bridges
 
-- **Build-Time `.scss` Precompilation**: `.scss` files in `src/commonMain/resources/**` generate `ResourceType.STYLE` (`R.style.<name>` / `Resource.style.<name>`) and precompile via `SassKotlinPrecompiler` into `PrecompiledStyleSheet` (`CompiledStyleRule`) objects attached via `IApplication.addStyleSheet(...)` / `removeStyleSheet(...)` (automatically wired in `GeneratedAndroidApplication` and `GeneratedIosLauncherMain` when `styles { globalStyleSheet = "..." }` is configured).
-- **System Theme Detection (`ThemeMode.AUTO` Default)**:
-  - **Android (`:mobile:android`)**: Reads `Configuration.UI_MODE_NIGHT_MASK` (`UiModeManager` / `resources.configuration.uiMode`), listens to `onConfigurationChanged`, and applies `AppCompatDelegate.setDefaultNightMode(...)`.
-  - **iOS (`:mobile:ios`)**: Reads `UITraitCollection.currentTraitCollection.userInterfaceStyle` (`UIUserInterfaceStyleDark` vs. `UIUserInterfaceStyleLight`), observes `traitCollectionDidChange:`, and updates `UIWindow.overrideUserInterfaceStyle`.
+- **Android (`BackendTarget.Android`)**: Fully supported via [`AndroidExtensionRuntimeBridge`](src/androidMain/kotlin/com/nexustools/genericui/android/AndroidExtensionRuntimeBridge.kt), `GeneratedAndroidServiceWorkerService`, `AndroidServiceWorkerController` (`ServiceCompat.startForeground` ongoing notification with default `"Stop"` + `updateNotificationText` + `extendNotificationActions`/`replaceNotificationActions`), `AndroidServiceWorkerBinder` IPC, and conditional `BOOT_COMPLETED` receiver when `autostart = true`.
+- **iOS & iPadOS (`BackendTarget.IOS`, `BackendTarget.IPadOS`)**: `AppleMobileServiceWorkerRuntime` enforces **`ServiceWorkerExtension.isSupported = false`** and `isAutostartSupported = false` with **zero background worker simulation** and **zero `@MainServiceWorker` instantiation**.
 
 ---
 
-## Mobile `TitleCapabilities` & Optional Top Navbar Chrome
+## Native Mobile Control Rendering (`BootstrapType.NONE`), Tinting (`BootstrapType != NONE`), & Style Restraints
 
-Unlike desktop platforms where an OS window always has a titlebar (`isTitleBarRequired = true`), both `:mobile:android` and `:mobile:ios` report `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true`:
-1. **Neither `TitleBar` nor `MenuBar` set**: **No top navbar is rendered at all**; the root container fills the entire safe-area viewport.
-2. **`TitleBar` and/or `MenuBar` set**: Renders a single top navigation bar (`MaterialToolbar` / `AndroidNavbarImpl` on Android; native top navigation bar on iOS) with single-placement custom components (`mountedInTitleBar = true`) and a merged right-aligned `MenuBar` dropdown (`☰`) when a `MenuBar` is present.
+1. **`BootstrapType.NONE` Default — 100% Unmodified Native Controls**: Material/AppCompat views (`MaterialButton`, `AppCompatEditText`, `SwitchMaterial`) on Android and genuine `UIControl`s (`UIButton`, `UITextField`, `UISwitch`, `UISlider`) on UIKit match the active `LIGHT` / `DARK` OS appearance (`ThemeMode.AUTO`).
+2. **`BootstrapType != NONE`**: Android tints control drawables via `ViewCompat.setBackgroundTintList` / `AndroidControlTintRenderUtil`; UIKit tints controls via `UIButton.Configuration` / `IosControlTintRenderUtil`, overlaying contrasting labels.
+3. **Typography vs. Aesthetic Style Restraints**: Text elements honor typography and text color; standard controls/containers ignore aesthetic CSS skinning (tint via `BootstrapType` only); `StyledContainer` / `StyledButton` / [`:extensions:ui:alien`](../extensions/docs/alien.md) honor full `ComponentStyle`.
+4. **Strict User CSS Class Isolation & Optional Navbar Chrome**: `styleSnapshot.customClasses` never mixes with `ComponentBootstrap` enums. `TitleCapabilities` sets `isTitleBarRequired = false`, `titleBarRendersAsNavbar = true`, `menuBarRendersAsNavbar = true`, and `menuBarMergesIntoTitleNavbar = true` (omitting any top bar when neither `TitleBar` nor `MenuBar` is set).
 
 ---
 
-## Bare-Metal Native Async `IFileSystem`, `Database`, & `Network` Across Mobile Backends
+## Bare-Metal Native Async `IFileSystem`, `Database`, & `Network`
 
-| Backend | `FileSystem` (`FileSystemAvailability.WithPermission`) & `UserDirectory` (`FileSystemAvailability.Always`) | Native `Database` (`DatabaseQuerySqlTranslator`) | Async `Network` (`TcpClient`, `UdpClient`), `HttpClient`, `WebSocket`, & `IApplication.isOffline` |
+| Backend | `FileSystem` & `UserDirectory` | Native `Database` (`DatabaseQuerySqlTranslator`) | Async `Network`, `HttpClient`, `WebSocket`, & `IApplication.isOffline` |
 | :--- | :--- | :--- | :--- |
-| [`:mobile:android`](android/README.md) | `FileChannel` + Storage Access Framework (`ContentResolver` / `ACTION_OPEN_DOCUMENT*`); `AndroidUserDirectoryNativeImpl` (`context.filesDir` & `context.cacheDir`) | **`androidx.sqlite:sqlite-ktx`** (`android.database.sqlite.SQLiteDatabase` / `SQLiteStatement` on `Dispatchers.IO`) | `SocketChannel` / `SSLSocket`, `DatagramChannel` / `MulticastSocket`, `HttpURLConnection`, RFC 6455 WebSocket, `ConnectivityManager` (`NetworkCallback`) |
-| [`:mobile:ios`](ios/README.md) | `NSFileManager` / `dispatch_io_t` + `UIDocumentPickerViewController` security-scoped URLs; `IosUserDirectoryNativeImpl` (`Library/Application Support` & `Library/Caches`) | **`libsqlite3`** (`sqlite3_open_v2`, `sqlite3_prepare_v2`) | `Network.framework` (`NWConnection` TCP/TLS & BSD `SOCK_DGRAM`), `NSURLSession` (`NSURLSessionDataTask`, `NSURLSessionWebSocketTask`), `NWPathMonitor` |
+| [**`Android`** (`androidMain`)](docs/android.md) | `:jvm` `FileChannel` + SAF `ContentResolver` (`ACTION_OPEN_DOCUMENT*`); `AndroidUserDirectoryNativeImpl` (`filesDir`/`cacheDir`) | **`androidx.sqlite:sqlite-ktx`** (`AndroidDatabaseNativeImpl` + `:jvm` `JvmDatabaseBase`) | `:jvm` TCP (`Socket`/`SSLSocket`), `AndroidUdpSocketNativeImpl` (`WifiManager.MulticastLock` around `JvmUdpSocketNativeImpl`), `JvmHttpUrlConnectionClient`, `JvmRfc6455WebSocketNativeImpl`, `ConnectivityManager` (`NetworkCallback`) |
+| [**`IOS` & `IPadOS`** (`iosMain`)](docs/ios.md) | `:apple` `NSFileManager` / `dispatch_io_t` + `UIDocumentPickerViewController`; `AppleUserDirectoryNativeImpl` (`Library/Application Support` & `Caches`) | **`:apple` `libsqlite3`** (`AppleDatabaseNativeImpl`) | `:apple` `Network.framework` (`NWConnection` TCP/TLS & BSD `SOCK_DGRAM`), `NSURLSession`, `NSURLSessionWebSocketTask`, `NWPathMonitor` |
