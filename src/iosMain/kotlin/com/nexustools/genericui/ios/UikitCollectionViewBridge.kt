@@ -43,6 +43,7 @@ class UikitCollectionViewBridge(
     override fun collectionView(collectionView: UICollectionView, numberOfItemsInSection: Long): Long =
         itemCount.toLong()
 
+    @kotlinx.cinterop.ObjCSignatureOverride
     override fun collectionView(
         collectionView: UICollectionView,
         cellForItemAtIndexPath: NSIndexPath
@@ -85,6 +86,23 @@ class UikitCollectionViewBridge(
         } else {
             CGSizeMake(cw.takeIf { it > 0.0 } ?: 360.0, estimatedItemExtentPt)
         }
+    }
+
+    @kotlinx.cinterop.ObjCSignatureOverride
+    override fun collectionView(
+        collectionView: UICollectionView,
+        canFocusItemAtIndexPath: NSIndexPath
+    ): Boolean {
+        if (!UikitFocusRegistry.isEffectivelyFocusable(collectionView)) return false
+        val cell = collectionView.cellForItemAtIndexPath(canFocusItemAtIndexPath)
+        if (cell != null) {
+            if (!UikitFocusRegistry.isEffectivelyFocusable(cell)) return false
+            val boundImpl = cellBoundImpls[cell]?.second
+            if (boundImpl is IosBaseNativeImpl && !boundImpl.isFocusable()) return false
+            val boundView = (boundImpl?.nativeWidget as? UikitViewHandle)?.uiView
+            if (boundView != null && !UikitFocusRegistry.isEffectivelyFocusable(boundView)) return false
+        }
+        return true
     }
 
     override fun scrollViewDidScroll(scrollView: platform.UIKit.UIScrollView) {

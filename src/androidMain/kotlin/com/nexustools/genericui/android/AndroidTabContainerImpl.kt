@@ -3,9 +3,9 @@ package com.nexustools.genericui.android
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.TypedValue
+import android.view.ContextThemeWrapper
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
@@ -13,28 +13,25 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.widget.AppCompatButton
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.AppCompatImageView
+import com.google.android.material.tabs.TabLayout
 import com.nexustools.genericui.component.tabs.TabBarStyle
 import com.nexustools.genericui.component.tabs.TabIconPlacement
 import com.nexustools.genericui.component.tabs.TabPosition
 import com.nexustools.genericui.core.NativeImpl
-import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.nativeimpl.tabs.TabContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
-import com.nexustools.genericui.style.color.BootstrapColorPalette
 
 /**
- * Android tab bar + content host implementation of [TabContainerNativeImpl],
- * rendering tab titles, icons, badges, pin/dirty indicators, close buttons,
- * inline editable tab titles, and custom tab header views.
+ * Android Material [TabLayout] + content host implementation of [TabContainerNativeImpl],
+ * rendering genuine Material tabs while ignoring `BootstrapType` overrides.
  */
-class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.LinearLayout", "nav-tabs"), TabContainerNativeImpl<AndroidViewHandle> {
+class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.android.material.tabs.TabLayout", "nav-tabs"), TabContainerNativeImpl<AndroidViewHandle> {
     override val supportsNativeFadeTransition: Boolean = true
 
     private val tabImpls = mutableListOf<TabNativeImpl<*>?>()
@@ -42,39 +39,86 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
     private val tabContents = mutableListOf<NativeImpl<*>?>()
     private var selectedIndexVal: Int = 0
     private var fullWidthTabsVal: Boolean = false
+    private var tabPositionVal: TabPosition = TabPosition.TOP
+    private var tabBarStyleVal: TabBarStyle = TabBarStyle.TABS
+    private var suppressTabSelectionCallback: Boolean = false
     private var onTabSelectedListener: ((Int) -> Unit)? = null
     private var onTabCloseRequestedListener: ((Int) -> Boolean)? = null
 
-    private var headerScroll: HorizontalScrollView? = null
-    private var headerRow: LinearLayout? = null
+    var tabLayout: TabLayout? = null
+        private set
+    private var rootLayout: LinearLayout? = null
     private var headerBottomBorder: View? = null
     private var contentHost: AndroidFlexContainerView? = null
+
+    override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
+
+    private fun resolveMaterialContext(context: Context, isDark: Boolean): Context {
+        val tv = TypedValue()
+        val theme = context.theme
+        val hasAppCompat = runCatching {
+            theme.resolveAttribute(androidx.appcompat.R.attr.colorPrimary, tv, true)
+        }.getOrDefault(false)
+        val hasMaterial = runCatching {
+            theme.resolveAttribute(com.google.android.material.R.attr.colorPrimaryVariant, tv, true)
+        }.getOrDefault(false)
+        if (hasAppCompat && hasMaterial) {
+            return context
+        }
+        val styleRes = if (isDark) {
+            com.google.android.material.R.style.Theme_MaterialComponents_NoActionBar
+        } else {
+            com.google.android.material.R.style.Theme_MaterialComponents_Light_NoActionBar
+        }
+        return ContextThemeWrapper(context, styleRes)
+    }
 
     override fun createDefaultAndroidView(context: Context): View {
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
         }
-        val scroll = HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = true
+        rootLayout = root
+        val isDark = AndroidViewHandle.isDarkTheme()
+        val materialContext = resolveMaterialContext(context, isDark)
+        val materialTabLayout = TabLayout(materialContext).apply {
+            tabMode = TabLayout.MODE_SCROLLABLE
+            tabGravity = TabLayout.GRAVITY_START
+            isInlineLabel = true
+            addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+                override fun onTabSelected(tab: TabLayout.Tab) {
+                    if (suppressTabSelectionCallback) return
+                    val pos = tab.position
+                    if (pos !in tabTitles.indices) return
+                    if (tabContents.getOrNull(pos) == null && tabImpls.getOrNull(pos) != null) {
+                        onTabSelectedListener?.invoke(pos)
+                        val restoreTab = getTabAt(selectedIndexVal)
+                        if (restoreTab != null && restoreTab !== tab) {
+                            suppressTabSelectionCallback = true
+                            try {
+                                restoreTab.select()
+                            } finally {
+                                suppressTabSelectionCallback = false
+                            }
+                        }
+                        return
+                    }
+                    setSelectedTabIndex(pos, false)
+                }
+
+                override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+
+                override fun onTabReselected(tab: TabLayout.Tab) {
+                    if (suppressTabSelectionCallback) return
+                    val pos = tab.position
+                    if (pos !in tabTitles.indices) return
+                    if (tabContents.getOrNull(pos) == null && tabImpls.getOrNull(pos) != null) {
+                        onTabSelectedListener?.invoke(pos)
+                    }
+                }
+            })
         }
-        headerScroll = scroll
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val padH = AndroidViewHandle.dpToPx(4)
-            val padV = AndroidViewHandle.dpToPx(4)
-            setPadding(padH, padV, padH, padV)
-        }
-        headerRow = row
-        scroll.addView(
-            row,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
+        tabLayout = materialTabLayout
         val borderView = View(context).apply {
-            val isDark = AndroidViewHandle.isDarkTheme()
             setBackgroundColor(if (isDark) 0xFF2A2B36.toInt() else 0xFFD0D5DD.toInt())
         }
         headerBottomBorder = borderView
@@ -82,29 +126,62 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         contentHost = host
         nativeWidget.childHostViewGroup = host
 
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-        root.addView(
-            borderView,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                AndroidViewHandle.dpToPx(1).coerceAtLeast(1)
-            )
-        )
-        root.addView(
-            host,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
+        assembleRootChildren(root)
         return root
+    }
+
+    private fun assembleRootChildren(root: LinearLayout) {
+        val layout = tabLayout ?: return
+        val border = headerBottomBorder ?: return
+        val host = contentHost ?: return
+        root.removeAllViews()
+        if (tabPositionVal == TabPosition.BOTTOM) {
+            root.addView(
+                host,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+            root.addView(
+                border,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    AndroidViewHandle.dpToPx(1).coerceAtLeast(1)
+                )
+            )
+            root.addView(
+                layout,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        } else {
+            root.addView(
+                layout,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+            root.addView(
+                border,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    AndroidViewHandle.dpToPx(1).coerceAtLeast(1)
+                )
+            )
+            root.addView(
+                host,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                )
+            )
+        }
     }
 
     override fun addTabNative(tabImpl: TabNativeImpl<*>, contentImpl: NativeImpl<*>, index: Int) {
@@ -198,10 +275,17 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
     }
 
     override fun setTabPositionNative(position: TabPosition) {
+        tabPositionVal = position
         nativeWidget.attributes["tabPosition"] = position.name
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                rootLayout?.let { assembleRootChildren(it) }
+            }
+        }
     }
 
     override fun setTabBarStyleNative(style: TabBarStyle) {
+        tabBarStyleVal = style
         nativeWidget.attributes["tabBarStyle"] = style.name
         syncTabsVisibilityAndHeader()
     }
@@ -252,16 +336,15 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             runCatching {
                 hideTabPlaceholderViews()
             }
-            rebuildHeaderButtons()
+            rebuildMaterialTabs()
         }
     }
 
-    private fun rebuildHeaderButtons() {
+    private fun rebuildMaterialTabs() {
         AndroidViewHandle.runOnMainThread {
             runCatching {
-                val row = headerRow ?: return@runCatching
-                val ctx = row.context ?: return@runCatching
-                row.removeAllViews()
+                val layout = tabLayout ?: return@runCatching
+                val ctx = layout.context ?: return@runCatching
                 val isDark = AndroidViewHandle.isDarkTheme()
                 headerBottomBorder?.setBackgroundColor(if (isDark) 0xFF2A2B36.toInt() else 0xFFD0D5DD.toInt())
 
@@ -270,283 +353,121 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
                     t != null && t.iconPlacementVal == TabIconPlacement.TOP && !t.iconVal.isNullOrBlank()
                 }
                 val useEqualWidth = fullWidthTabsVal || anyTopIcon
-                headerScroll?.isFillViewport = useEqualWidth
-                if (useEqualWidth) {
-                    row.setPadding(0, 0, 0, 0)
-                } else {
-                    val padH = AndroidViewHandle.dpToPx(4)
-                    val padV = AndroidViewHandle.dpToPx(4)
-                    row.setPadding(padH, padV, padH, padV)
-                }
+                layout.isInlineLabel = !anyTopIcon
+                layout.tabMode = if (useEqualWidth) TabLayout.MODE_FIXED else TabLayout.MODE_SCROLLABLE
+                layout.tabGravity = if (useEqualWidth) TabLayout.GRAVITY_FILL else TabLayout.GRAVITY_START
 
-                val activeAccentArgb = if (isDark) 0xFF9AB8F7.toInt() else 0xFF234B9E.toInt()
-                val inactiveLabelArgb = if (isDark) 0xFFE3E2E6.toInt() else 0xFF49454F.toInt()
-                val primaryArgb = BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, isDark).toArgbInt()
-                val inactiveBgArgb = if (isDark) 0xFF1E222A.toInt() else 0xFFEAECEF.toInt()
-                val inactiveFgArgb = if (isDark) 0xFFB8C0D0.toInt() else 0xFF495057.toInt()
-
-                for (i in tabTitles.indices) {
-                    val androidTab = tabImpls.getOrNull(i) as? AndroidTabImpl
-                    val title = androidTab?.titleVal?.takeIf { it.isNotEmpty() } ?: tabTitles[i]
-                    val isSelected = i == selectedIndexVal
-                    val iconSrc = androidTab?.iconVal?.takeIf { it.isNotBlank() }
-                    val iconSizeDp = androidTab?.iconSizePxVal ?: 20
-                    val placement = androidTab?.iconPlacementVal ?: TabIconPlacement.START
-                    val tintToTheme = androidTab?.tintImageToThemeVal ?: true
-                    val iconTintArgb = if (tintToTheme) {
-                        if (isDark) 0xFFFFFFFF.toInt() else 0xFF1C1B1F.toInt()
-                    } else {
-                        null
-                    }
-                    val resolvedDrawable = if (iconSrc != null) {
-                        AndroidImageImpl.resolveDrawable(ctx, iconSrc, iconTintArgb)
-                    } else {
-                        null
-                    }
-
-                    val hasRichDecorations = androidTab != null && (
-                        androidTab.closableVal ||
-                            androidTab.dirtyVal ||
-                            androidTab.pinnedVal ||
-                            androidTab.editableVal ||
-                            !androidTab.badgeTextVal.isNullOrEmpty()
-                        )
-
-                    if (placement == TabIconPlacement.TOP && (resolvedDrawable != null || iconSrc != null)) {
-                        val tabItem = LinearLayout(ctx).apply {
-                            orientation = LinearLayout.VERTICAL
-                            gravity = Gravity.CENTER_HORIZONTAL
-                            isClickable = true
-                            isFocusable = true
-                            val padTop = AndroidViewHandle.dpToPx(8)
-                            val padH = AndroidViewHandle.dpToPx(4)
-                            setPadding(padH, padTop, padH, 0)
-                            setOnClickListener {
-                                setSelectedTabIndex(i, false)
-                            }
+                suppressTabSelectionCallback = true
+                try {
+                    layout.removeAllTabs()
+                    val labelFallbackColor = if (isDark) 0xFFE3E2E6.toInt() else 0xFF1C1B1F.toInt()
+                    for (i in tabTitles.indices) {
+                        val androidTab = tabImpls.getOrNull(i) as? AndroidTabImpl
+                        val rawTitle = androidTab?.titleVal?.takeIf { it.isNotEmpty() } ?: tabTitles[i]
+                        val displayTitle = buildString {
+                            if (androidTab?.pinnedVal == true) append("\uD83D\uDCCC ")
+                            if (androidTab?.dirtyVal == true) append("\u2022 ")
+                            append(rawTitle)
                         }
-
-                        val iconPx = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(16)
-                        val iconView = AppCompatImageView(ctx).apply {
-                            scaleType = ImageView.ScaleType.FIT_CENTER
-                            if (resolvedDrawable != null) {
-                                setImageDrawable(resolvedDrawable)
-                            }
-                        }
-                        tabItem.addView(
-                            iconView,
-                            LinearLayout.LayoutParams(iconPx, iconPx).apply {
-                                gravity = Gravity.CENTER_HORIZONTAL
-                            }
-                        )
-
-                        val labelText = if (androidTab?.dirtyVal == true) "• $title" else title
-                        val labelView = TextView(ctx).apply {
-                            text = labelText
-                            gravity = Gravity.CENTER
-                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                            setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-                            setTextColor(if (isSelected) activeAccentArgb else (if (isDark) 0xFF9AB8F7.toInt() else inactiveLabelArgb))
-                        }
-                        tabItem.addView(
-                            labelView,
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply {
-                                gravity = Gravity.CENTER_HORIZONTAL
-                                topMargin = AndroidViewHandle.dpToPx(6)
-                                bottomMargin = AndroidViewHandle.dpToPx(8)
-                            }
-                        )
-
-                        val indicatorView = View(ctx).apply {
-                            setBackgroundColor(if (isSelected) activeAccentArgb else Color.TRANSPARENT)
-                        }
-                        tabItem.addView(
-                            indicatorView,
-                            LinearLayout.LayoutParams(
-                                AndroidViewHandle.dpToPx(56),
-                                AndroidViewHandle.dpToPx(3).coerceAtLeast(2)
-                            ).apply {
-                                gravity = Gravity.CENTER_HORIZONTAL
-                            }
-                        )
-
-                        val lp = if (useEqualWidth) {
-                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        } else {
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            )
-                        }
-                        row.addView(tabItem, lp)
-                    } else if (hasRichDecorations) {
-                        val chipRow = buildDecoratedTabChip(
-                            ctx = ctx,
-                            index = i,
-                            title = title,
-                            androidTab = androidTab!!,
-                            isSelected = isSelected,
-                            isDark = isDark,
-                            primaryArgb = primaryArgb,
-                            inactiveBgArgb = inactiveBgArgb,
-                            inactiveFgArgb = inactiveFgArgb,
-                            resolvedDrawable = resolvedDrawable,
-                            iconSizeDp = iconSizeDp
-                        )
-                        val lp = if (useEqualWidth) {
-                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        } else {
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply {
-                                if (i > 0) leftMargin = AndroidViewHandle.dpToPx(6)
-                            }
-                        }
-                        row.addView(chipRow, lp)
-                    } else if (useEqualWidth) {
-                        val tabItem = LinearLayout(ctx).apply {
-                            orientation = LinearLayout.VERTICAL
-                            gravity = Gravity.CENTER_HORIZONTAL
-                            isClickable = true
-                            isFocusable = true
-                            setOnClickListener {
-                                setSelectedTabIndex(i, false)
-                            }
-                        }
-                        val labelView = TextView(ctx).apply {
-                            text = title
-                            gravity = Gravity.CENTER
-                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                            setTypeface(null, Typeface.BOLD)
-                            setTextColor(if (isSelected) activeAccentArgb else (if (isDark) 0xFF9AB8F7.toInt() else inactiveLabelArgb))
-                            val padH = AndroidViewHandle.dpToPx(8)
-                            val padV = AndroidViewHandle.dpToPx(12)
-                            setPadding(padH, padV, padH, padV)
-                            if (resolvedDrawable != null) {
+                        val iconSrc = androidTab?.iconVal?.takeIf { it.isNotBlank() }
+                        val iconSizeDp = androidTab?.iconSizePxVal ?: 20
+                        val tintToTheme = androidTab?.tintImageToThemeVal ?: true
+                        val iconTintArgb = if (tintToTheme) labelFallbackColor else null
+                        val resolvedDrawable = if (iconSrc != null) {
+                            AndroidImageImpl.resolveDrawable(ctx, iconSrc, iconTintArgb)?.also { d ->
                                 val px = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
-                                resolvedDrawable.setBounds(0, 0, px, px)
-                                setCompoundDrawables(resolvedDrawable, null, null, null)
-                                compoundDrawablePadding = AndroidViewHandle.dpToPx(6)
+                                d.setBounds(0, 0, px, px)
                             }
+                        } else {
+                            null
                         }
-                        tabItem.addView(
-                            labelView,
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply {
-                                gravity = Gravity.CENTER_HORIZONTAL
-                            }
-                        )
-                        val indicatorView = View(ctx).apply {
-                            setBackgroundColor(if (isSelected) activeAccentArgb else Color.TRANSPARENT)
-                        }
-                        tabItem.addView(
-                            indicatorView,
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                AndroidViewHandle.dpToPx(3).coerceAtLeast(2)
+
+                        val tab = layout.newTab()
+                        tab.text = displayTitle
+                        val needsCustomView = androidTab != null && (
+                            androidTab.customHeaderImpl != null ||
+                                androidTab.editableVal ||
+                                (androidTab.closableVal && !androidTab.pinnedVal)
                             )
-                        )
-                        row.addView(
-                            tabItem,
-                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        )
-                    } else {
-                        val btn = AppCompatButton(ctx).apply {
-                            text = title
-                            isAllCaps = false
-                            gravity = Gravity.CENTER
-                            minWidth = 0
-                            minimumWidth = 0
-                            minHeight = AndroidViewHandle.dpToPx(34)
-                            minimumHeight = AndroidViewHandle.dpToPx(34)
-                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                            setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-                            setTextColor(if (isSelected) 0xFFFFFFFF.toInt() else inactiveFgArgb)
-                            val hPad = AndroidViewHandle.dpToPx(14)
-                            val vPad = AndroidViewHandle.dpToPx(6)
-                            setPadding(hPad, vPad, hPad, vPad)
-                            background = GradientDrawable().apply {
-                                shape = GradientDrawable.RECTANGLE
-                                cornerRadius = AndroidViewHandle.dpToPxFloat(6f)
-                                setColor(if (isSelected) primaryArgb else inactiveBgArgb)
-                            }
-                            if (resolvedDrawable != null) {
-                                val px = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
-                                resolvedDrawable.setBounds(0, 0, px, px)
-                                setCompoundDrawables(resolvedDrawable, null, null, null)
-                                compoundDrawablePadding = if (title.isNotEmpty()) AndroidViewHandle.dpToPx(6) else 0
-                            }
-                            setOnClickListener {
-                                setSelectedTabIndex(i, false)
-                            }
+
+                        if (needsCustomView && androidTab != null) {
+                            tab.customView = buildInteractiveTabCustomView(
+                                ctx = ctx,
+                                index = i,
+                                title = rawTitle,
+                                displayTitle = displayTitle,
+                                androidTab = androidTab,
+                                isSelected = i == selectedIndexVal,
+                                labelColor = labelFallbackColor,
+                                resolvedDrawable = resolvedDrawable,
+                                iconSizeDp = iconSizeDp
+                            )
+                        } else if (resolvedDrawable != null) {
+                            tab.icon = resolvedDrawable
                         }
-                        val lp = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply {
-                            if (i > 0) {
-                                leftMargin = AndroidViewHandle.dpToPx(6)
+
+                        val bText = androidTab?.badgeTextVal
+                        if (!bText.isNullOrEmpty()) {
+                            runCatching {
+                                tab.orCreateBadge.apply {
+                                    isVisible = true
+                                    text = bText
+                                }
                             }
+                        } else {
+                            runCatching { tab.removeBadge() }
                         }
-                        row.addView(btn, lp)
+
+                        layout.addTab(tab, i == selectedIndexVal)
                     }
+                    if (tabTitles.isNotEmpty() && selectedIndexVal in tabTitles.indices) {
+                        val targetTab = layout.getTabAt(selectedIndexVal)
+                        if (targetTab != null && !targetTab.isSelected) {
+                            targetTab.select()
+                        }
+                    }
+                } finally {
+                    suppressTabSelectionCallback = false
                 }
             }
         }
     }
 
-    private fun buildDecoratedTabChip(
+    private fun buildInteractiveTabCustomView(
         ctx: Context,
         index: Int,
         title: String,
+        displayTitle: String,
         androidTab: AndroidTabImpl,
         isSelected: Boolean,
-        isDark: Boolean,
-        primaryArgb: Int,
-        inactiveBgArgb: Int,
-        inactiveFgArgb: Int,
+        labelColor: Int,
         resolvedDrawable: android.graphics.drawable.Drawable?,
         iconSizeDp: Int
     ): View {
-        val fgColor = if (isSelected) 0xFFFFFFFF.toInt() else inactiveFgArgb
-        val chip = LinearLayout(ctx).apply {
+        val customHeaderView = androidTab.customHeaderImpl?.let { headerImpl ->
+            (headerImpl.nativeWidget as? AndroidViewHandle)?.androidView
+        }
+        val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            isClickable = true
-            isFocusable = true
-            minimumHeight = AndroidViewHandle.dpToPx(34)
-            val hPad = AndroidViewHandle.dpToPx(12)
-            val vPad = AndroidViewHandle.dpToPx(6)
-            setPadding(hPad, vPad, hPad, vPad)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = AndroidViewHandle.dpToPxFloat(6f)
-                setColor(if (isSelected) primaryArgb else inactiveBgArgb)
-            }
-            setOnClickListener {
-                setSelectedTabIndex(index, false)
-            }
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
-        if (androidTab.pinnedVal) {
-            chip.addView(
-                TextView(ctx).apply {
-                    text = "📌"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                    setPadding(0, 0, AndroidViewHandle.dpToPx(4), 0)
-                }
+        if (customHeaderView != null) {
+            (customHeaderView.parent as? ViewGroup)?.removeView(customHeaderView)
+            row.addView(
+                customHeaderView,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
             )
+            return row
         }
 
         if (resolvedDrawable != null) {
             val iconPx = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
-            chip.addView(
+            row.addView(
                 AppCompatImageView(ctx).apply {
                     scaleType = ImageView.ScaleType.FIT_CENTER
                     setImageDrawable(resolvedDrawable)
@@ -557,32 +478,21 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             )
         }
 
-        if (androidTab.dirtyVal) {
-            chip.addView(
-                TextView(ctx).apply {
-                    text = "•"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(BootstrapColorPalette.resolveColor(BootstrapType.WARNING, isDark).toArgbInt())
-                    setPadding(0, 0, AndroidViewHandle.dpToPx(4), 0)
-                }
-            )
-        }
-
         val titleTv = TextView(ctx).apply {
-            text = title
+            id = android.R.id.text1
+            text = displayTitle
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-            setTextColor(fgColor)
+            setTextColor(labelColor)
             isSingleLine = true
         }
-        chip.addView(titleTv)
+        row.addView(titleTv)
 
         if (androidTab.editableVal) {
             val editTv = AppCompatEditText(ctx).apply {
                 setText(title)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setTextColor(fgColor)
+                setTextColor(labelColor)
                 isSingleLine = true
                 inputType = InputType.TYPE_CLASS_TEXT
                 imeOptions = EditorInfo.IME_ACTION_DONE
@@ -628,7 +538,12 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
                         titleTv.visibility = View.GONE
                         editTv.visibility = View.VISIBLE
                         editTv.setText(title)
-                        editTv.requestFocus()
+                        val canFocus = this@AndroidTabContainerImpl.isFocusable() && androidTab.isFocusable()
+                        editTv.isFocusable = canFocus
+                        editTv.isFocusableInTouchMode = canFocus
+                        if (canFocus) {
+                            editTv.requestFocus()
+                        }
                         editTv.selectAll()
                         return true
                     }
@@ -641,50 +556,20 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
                 titleTv.visibility = View.GONE
                 editTv.visibility = View.VISIBLE
                 editTv.setText(title)
-                editTv.requestFocus()
+                val canFocus = this@AndroidTabContainerImpl.isFocusable() && androidTab.isFocusable()
+                editTv.isFocusable = canFocus
+                editTv.isFocusableInTouchMode = canFocus
+                if (canFocus) {
+                    editTv.requestFocus()
+                }
                 editTv.selectAll()
                 true
             }
-            chip.addView(editTv)
-        }
-
-        val bText = androidTab.badgeTextVal
-        if (!bText.isNullOrEmpty()) {
-            val badgeType = when (androidTab.badgeVariantVal.lowercase()) {
-                "danger", "error" -> BootstrapType.DANGER
-                "success" -> BootstrapType.SUCCESS
-                "warning" -> BootstrapType.WARNING
-                "secondary" -> BootstrapType.SECONDARY
-                "info" -> BootstrapType.INFO
-                else -> BootstrapType.PRIMARY
-            }
-            val pillColor = BootstrapColorPalette.resolveColor(badgeType, isDark).toArgbInt()
-            chip.addView(
-                TextView(ctx).apply {
-                    text = bText
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.WHITE)
-                    val bPadH = AndroidViewHandle.dpToPx(6)
-                    val bPadV = AndroidViewHandle.dpToPx(2)
-                    setPadding(bPadH, bPadV, bPadH, bPadV)
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.RECTANGLE
-                        cornerRadius = AndroidViewHandle.dpToPxFloat(10f)
-                        setColor(pillColor)
-                    }
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    leftMargin = AndroidViewHandle.dpToPx(6)
-                }
-            )
+            row.addView(editTv)
         }
 
         if (androidTab.closableVal && !androidTab.pinnedVal) {
-            chip.addView(
+            row.addView(
                 AppCompatButton(ctx).apply {
                     text = "✕"
                     isAllCaps = false
@@ -694,8 +579,8 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
                     minimumHeight = 0
                     setBackgroundColor(Color.TRANSPARENT)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setTextColor(fgColor)
-                    setPadding(AndroidViewHandle.dpToPx(4), 0, AndroidViewHandle.dpToPx(2), 0)
+                    setTextColor(labelColor)
+                    setPadding(AndroidViewHandle.dpToPx(6), 0, AndroidViewHandle.dpToPx(2), 0)
                     setOnClickListener {
                         handleCloseTabIndex(index, androidTab)
                     }
@@ -709,7 +594,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
             )
         }
 
-        return chip
+        return row
     }
 
     private fun hideTabPlaceholderViews() {
@@ -734,6 +619,6 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("android.widget.L
         AndroidViewHandle.runOnMainThread {
             runCatching { hideTabPlaceholderViews() }
         }
-        rebuildHeaderButtons()
+        rebuildMaterialTabs()
     }
 }

@@ -284,6 +284,7 @@ class AndroidDialogWindowImpl : AndroidBaseContainerNativeImpl("androidx.appcomp
     }
 
     private fun resolveHostActivity(): Activity? {
+        AndroidActivityRegistry.resolveActiveActivity()?.let { return it }
         AndroidFileBrowserDialogImpl.activeHostActivity?.let { return it }
         var ctx: Context? = AndroidViewHandle.activeContext
         while (ctx is ContextWrapper) {

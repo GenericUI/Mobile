@@ -1,40 +1,71 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
-import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.Menu
+import android.view.MotionEvent
 import android.view.View
+import android.view.WindowManager
+import android.widget.PopupMenu
 import android.widget.TextView
-import androidx.appcompat.widget.AppCompatButton
-import androidx.appcompat.widget.PopupMenu
+import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.nativeimpl.action.DropdownNativeImpl
+import com.nexustools.genericui.style.color.BootstrapColorPalette
 
 /**
- * Android `androidx.appcompat.widget.PopupMenu` implementation of [DropdownNativeImpl].
+ * Android `androidx.appcompat.widget.AppCompatButton` + `PopupMenu` implementation of [DropdownNativeImpl].
  */
 class AndroidDropdownImpl : AndroidBaseContainerNativeImpl("com.google.android.material.button.MaterialButton", "dropdown"), DropdownNativeImpl<AndroidViewHandle> {
     private var labelText: String = ""
     private val dropdownItems = mutableListOf<Pair<String, String>>()
     private var onItemSelectedListener: ((String) -> Unit)? = null
+    private var onPrimaryActionListener: (() -> Unit)? = null
+    private var lastTouchX: Float = -1f
+    private var hasTouchPosition: Boolean = false
 
     init {
         syncAndroidView()
     }
 
     override fun createDefaultAndroidView(context: Context): View =
-        AppCompatButton(context).apply {
-            isAllCaps = false
-            gravity = Gravity.CENTER
-            minWidth = 0
-            minimumWidth = 0
+        AndroidControlTintRenderUtil.createNativeOrTintedButton(
+            context = context,
+            implProvider = { this }
+        ).apply {
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_UP) {
+                    lastTouchX = event.x
+                    hasTouchPosition = true
+                }
+                false
+            }
             setOnClickListener { v ->
-                showDropdownPopup(v)
+                val primary = onPrimaryActionListener
+                val hitSplitCaret = primary != null &&
+                    hasTouchPosition &&
+                    dropdownItems.isNotEmpty() &&
+                    v.width > 0 &&
+                    lastTouchX >= (v.width - AndroidViewHandle.dpToPx(32)).coerceAtLeast(v.width * 2 / 3)
+                hasTouchPosition = false
+                when {
+                    hitSplitCaret -> showDropdownPopup(v)
+                    primary != null -> primary.invoke()
+                    else -> showDropdownPopup(v)
+                }
             }
         }
 
     override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
+
+    override fun syncNativeBootstrapAppearance() {
+        super.syncNativeBootstrapAppearance()
+        AndroidControlTintRenderUtil.syncButtonBootstrapAttributes(
+            nativeWidget = nativeWidget,
+            type = BootstrapType.NONE,
+            outline = false
+        )
+    }
 
     override fun setLabel(label: String) {
         labelText = label
@@ -58,6 +89,18 @@ class AndroidDropdownImpl : AndroidBaseContainerNativeImpl("com.google.android.m
         onItemSelectedListener = listener
     }
 
+    override fun setOnPrimaryAction(listener: (() -> Unit)?) {
+        onPrimaryActionListener = listener
+        nativeWidget.attributes["splitDropdown"] = (listener != null).toString()
+        syncAndroidView()
+    }
+
+    fun triggerPrimaryAction(): Boolean {
+        val listener = onPrimaryActionListener ?: return false
+        listener()
+        return true
+    }
+
     fun selectItem(id: String): Boolean {
         val listener = onItemSelectedListener ?: return false
         listener(id)
@@ -70,46 +113,50 @@ class AndroidDropdownImpl : AndroidBaseContainerNativeImpl("com.google.android.m
     }
 
     private fun showDropdownPopup(anchor: View) {
-        runCatching {
-            if (dropdownItems.isEmpty()) return@runCatching
-            val popup = PopupMenu(anchor.context, anchor)
-            dropdownItems.forEachIndexed { idx, pair ->
-                popup.menu.add(Menu.NONE, idx, idx, pair.second)
-            }
-            popup.setOnMenuItemClickListener { item ->
-                selectItemAt(item.itemId)
-                true
-            }
+        if (dropdownItems.isEmpty()) return
+        val popup = PopupMenu(anchor.context, anchor)
+        dropdownItems.forEachIndexed { idx, pair ->
+            popup.menu.add(Menu.NONE, idx, idx, pair.second)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            selectItemAt(item.itemId)
+            true
+        }
+        try {
             popup.show()
+        } catch (_: WindowManager.BadTokenException) {
+            // Detached host views in unit tests have no window token for PopupMenu display.
         }
     }
 
     override fun syncAndroidView() {
         super.syncAndroidView()
-        runCatching {
-            val tv = nativeWidget.androidView as? TextView ?: return@runCatching
-            val displayLabel = if (labelText.isNotEmpty()) "$labelText \u25BE" else "\u25BE"
+        AndroidViewHandle.runOnMainThread {
+            val tv = nativeWidget.androidView as? TextView ?: return@runOnMainThread
+            tv.isAllCaps = false
+            tv.gravity = Gravity.CENTER
+            tv.includeFontPadding = false
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+
+            val currentLabel = (labelText as String?) ?: nativeWidget.text
+            val displayLabel = if (currentLabel.isNotEmpty()) "$currentLabel \u25BE" else "\u25BE"
             if (tv.text?.toString() != displayLabel) {
                 tv.text = displayLabel
             }
+
             val isDark = AndroidViewHandle.isDarkTheme()
-            val bgArgb = customStyleBackgroundColor?.toArgbInt()
-                ?: if (isDark) 0xFF2B313E.toInt() else 0xFFE4E7EE.toInt()
-            val fgArgb = customStyleTextColor?.toArgbInt()
-                ?: if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
-            val borderArgb = customStyleBorderColor?.toArgbInt()
-                ?: if (isDark) 0xFF3E4656.toInt() else 0xFFCDD2DE.toInt()
-            tv.background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = resolveEffectiveBorderRadiusPx(6f)
-                setColor(bgArgb)
-                setStroke(AndroidViewHandle.dpToPx(1).coerceAtLeast(1), borderArgb)
-            }
+            val activeTheme = BootstrapColorPalette.activeThemeConfig
+            val fgArgb = AndroidControlTintRenderUtil.resolveContrastingForeground(
+                type = BootstrapType.NONE,
+                darkMode = isDark,
+                outline = false,
+                themeConfig = activeTheme
+            ).toArgbInt()
+
+            tv.backgroundTintList = null
             tv.setTextColor(fgArgb)
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            val hPad = AndroidViewHandle.dpToPx(12)
-            val vPad = AndroidViewHandle.dpToPx(7)
-            tv.setPadding(hPad, vPad, hPad, vPad)
+            tv.invalidate()
+            nativeWidget.onViewMutated?.invoke()
         }
     }
 }

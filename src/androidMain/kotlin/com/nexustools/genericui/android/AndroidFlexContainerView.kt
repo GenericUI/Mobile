@@ -17,7 +17,11 @@ import com.nexustools.genericui.enums.bootstrap.AlignSelf
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.enums.bootstrap.FlexWrap
 import com.nexustools.genericui.enums.bootstrap.JustifyContent
+import com.nexustools.genericui.enums.css.CssPosition
+import com.nexustools.genericui.enums.css.CssUnit
 import com.nexustools.genericui.style.css.CssFilter
+import com.nexustools.genericui.style.css.CssLength
+import com.nexustools.genericui.style.transition.CssTransform2D
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -82,7 +86,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         set(value) {
             if (field != value) {
                 field = value
-                isChildrenDrawingOrderEnabled = value || isRatioContainer
+                isChildrenDrawingOrderEnabled = true
                 requestLayout()
             }
         }
@@ -91,12 +95,27 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         set(value) {
             if (field != value) {
                 field = value
-                isChildrenDrawingOrderEnabled = value || isLayered
+                isChildrenDrawingOrderEnabled = true
                 requestLayout()
             }
         }
 
+    var cssPosition: CssPosition = CssPosition.STATIC
+        set(value) {
+            if (field != value) {
+                field = value
+                requestLayout()
+            }
+        }
+
+    var isWindowRootHost: Boolean = false
+
     var pointerEventsNone: Boolean = false
+    var cssPointerEventsNone: Boolean = false
+
+    init {
+        isChildrenDrawingOrderEnabled = true
+    }
 
     internal val backdropController = AndroidHardwareBackdropBlurController(this)
 
@@ -143,6 +162,19 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         var layerBottomPx: Int? = null
         var layerZIndex: Int = 0
         var layerPassThrough: Boolean = false
+        var cssPointerEventsNone: Boolean = false
+        var cssPosition: CssPosition = CssPosition.STATIC
+        var cssTop: CssLength? = null
+        var cssRight: CssLength? = null
+        var cssBottom: CssLength? = null
+        var cssLeft: CssLength? = null
+        var cssTransform2D: CssTransform2D = CssTransform2D.IDENTITY
+        internal var lastAppliedTransform: CssTransform2D? = null
+        internal var lastTransformWidth: Int = -1
+        internal var lastTransformHeight: Int = -1
+
+        internal fun isCssOutOfFlow(): Boolean =
+            cssPosition == CssPosition.ABSOLUTE || cssPosition == CssPosition.FIXED
 
         constructor(width: Int, height: Int) : super(width, height)
         constructor(source: ViewGroup.LayoutParams?) : super(source ?: MarginLayoutParams(WRAP_CONTENT, WRAP_CONTENT))
@@ -181,6 +213,13 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
                 it.layerBottomPx = p.layerBottomPx
                 it.layerZIndex = p.layerZIndex
                 it.layerPassThrough = p.layerPassThrough
+                it.cssPointerEventsNone = p.cssPointerEventsNone
+                it.cssPosition = p.cssPosition
+                it.cssTop = p.cssTop
+                it.cssRight = p.cssRight
+                it.cssBottom = p.cssBottom
+                it.cssLeft = p.cssLeft
+                it.cssTransform2D = p.cssTransform2D
             }
             is MarginLayoutParams -> LayoutParams(p)
             else -> LayoutParams(p)
@@ -197,7 +236,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         lp.layerFill || (!lp.layerFloat && (isRatioContainer || !lp.isLayerItem))
 
     override fun getChildDrawingOrder(childCount: Int, drawingPosition: Int): Int {
-        if ((!isLayered && !isRatioContainer) || childCount <= 1) {
+        if (childCount <= 1) {
             return super.getChildDrawingOrder(childCount, drawingPosition)
         }
         val ordered = (0 until childCount).sortedWith(
@@ -231,19 +270,19 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
-        if (ev == null) return false
-        if (pointerEventsNone && alpha <= 0.01f) return false
-        if ((isLayered || isRatioContainer) && ev.actionMasked == MotionEvent.ACTION_DOWN) {
+        if (ev == null || cssPointerEventsNone) return false
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
             for (i in 0 until childCount) {
                 val child = getChildAt(i) ?: continue
                 val lp = lpOf(child)
-                if (lp.layerPassThrough) {
-                    if (child is AndroidFlexContainerView) {
-                        child.pointerEventsNone = true
-                    } else if (child !is ViewGroup) {
-                        child.isClickable = false
-                        child.isLongClickable = false
-                    }
+                if (child is AndroidFlexContainerView) {
+                    child.pointerEventsNone = lp.layerPassThrough
+                    child.cssPointerEventsNone = lp.cssPointerEventsNone
+                } else if (lp.layerPassThrough && child !is ViewGroup) {
+                    child.isClickable = false
+                    child.isLongClickable = false
+                    child.isFocusable = false
+                    child.isFocusableInTouchMode = false
                 }
             }
         }
@@ -424,13 +463,18 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         val availWidth = (widthSize - padH).coerceAtLeast(0)
         val availHeight = (heightSize - padV).coerceAtLeast(0)
 
+        val allVisible = ArrayList<View>(childCount)
         val visibleChildren = ArrayList<View>(childCount)
         for (i in 0 until childCount) {
             val c = getChildAt(i)
             if (c != null && c.visibility != View.GONE) {
-                visibleChildren.add(c)
+                allVisible.add(c)
+                if (!lpOf(c).isCssOutOfFlow()) {
+                    visibleChildren.add(c)
+                }
             }
         }
+        measureOutOfFlowChildren(allVisible, widthMode, availWidth, heightMode, availHeight)
 
         if (visibleChildren.isEmpty()) {
             setMeasuredDimension(
@@ -560,13 +604,18 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         val availWidth = (widthSize - padH).coerceAtLeast(0)
         val availHeight = (heightSize - padV).coerceAtLeast(0)
 
+        val allVisible = ArrayList<View>(childCount)
         val visibleChildren = ArrayList<View>(childCount)
         for (i in 0 until childCount) {
             val c = getChildAt(i)
             if (c != null && c.visibility != View.GONE) {
-                visibleChildren.add(c)
+                allVisible.add(c)
+                if (!lpOf(c).isCssOutOfFlow()) {
+                    visibleChildren.add(c)
+                }
             }
         }
+        measureOutOfFlowChildren(allVisible, widthMode, availWidth, heightMode, availHeight)
 
         if (visibleChildren.isEmpty()) {
             setMeasuredDimension(
@@ -719,6 +768,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
                 else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
             }
             child.measure(childWidthSpec, childHeightSpec)
+            if (lp.isCssOutOfFlow()) continue
 
             val childTotalW = child.measuredWidth + cMarginH
             val childTotalH = child.measuredHeight + cMarginV
@@ -753,13 +803,167 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val cw = r - l
+        val ch = b - t
         val isRow = flexDirection == FlexDirection.ROW || flexDirection == FlexDirection.ROW_REVERSE
         val isWrapping = isRow && (flexWrap == FlexWrap.WRAP || flexWrap == FlexWrap.WRAP_REVERSE)
         when {
-            isLayered || isRatioContainer -> layoutLayered(r - l, b - t)
-            isWrapping -> layoutWrappedRow(r - l)
-            isRow -> layoutSingleRow(r - l, b - t)
-            else -> layoutColumn(r - l, b - t)
+            isLayered || isRatioContainer -> layoutLayered(cw, ch)
+            isWrapping -> layoutWrappedRow(cw)
+            isRow -> layoutSingleRow(cw, ch)
+            else -> layoutColumn(cw, ch)
+        }
+        if (!isLayered && !isRatioContainer) {
+            layoutOutOfFlowPositionedChildren(cw, ch)
+        }
+        applyZOrderAndTransformsAfterLayout()
+    }
+
+    private fun measureOutOfFlowChildren(
+        allVisible: List<View>,
+        widthMode: Int,
+        availWidth: Int,
+        heightMode: Int,
+        availHeight: Int
+    ) {
+        for (child in allVisible) {
+            val lp = lpOf(child)
+            if (!lp.isCssOutOfFlow()) continue
+            val cMarginH = lp.leftMargin + lp.rightMargin
+            val cMarginV = lp.topMargin + lp.bottomMargin
+            val childWSpec = when {
+                lp.width > 0 -> MeasureSpec.makeMeasureSpec(lp.width, MeasureSpec.EXACTLY)
+                widthMode != MeasureSpec.UNSPECIFIED ->
+                    MeasureSpec.makeMeasureSpec((availWidth - cMarginH).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            }
+            val childHSpec = when {
+                lp.height > 0 -> MeasureSpec.makeMeasureSpec(lp.height, MeasureSpec.EXACTLY)
+                heightMode != MeasureSpec.UNSPECIFIED ->
+                    MeasureSpec.makeMeasureSpec((availHeight - cMarginV).coerceAtLeast(0), MeasureSpec.AT_MOST)
+                else -> MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            }
+            child.measure(childWSpec, childHSpec)
+        }
+    }
+
+    private fun resolveContainingBlock(childPosition: CssPosition): Triple<ViewGroup, Int, Int> {
+        if (childPosition == CssPosition.FIXED) {
+            if (isWindowRootHost || parent !is ViewGroup) {
+                return Triple(this, 0, 0)
+            }
+        } else {
+            val selfIsBlock = isWindowRootHost || isLayered || isRatioContainer ||
+                cssPosition != CssPosition.STATIC || parent !is ViewGroup
+            if (selfIsBlock) {
+                return Triple(this, 0, 0)
+            }
+        }
+        var offsetX = left
+        var offsetY = top
+        var cur: ViewGroup? = parent as? ViewGroup
+        while (cur != null) {
+            if (cur is AndroidFlexContainerView) {
+                val curIsBlock = cur.isWindowRootHost ||
+                    (childPosition != CssPosition.FIXED && (cur.isLayered || cur.isRatioContainer || cur.cssPosition != CssPosition.STATIC))
+                if (curIsBlock) {
+                    return Triple(cur, offsetX, offsetY)
+                }
+            }
+            val nextParent = cur.parent as? ViewGroup
+            if (nextParent == null || nextParent.id == android.R.id.content) {
+                return Triple(cur, offsetX, offsetY)
+            }
+            offsetX += cur.left
+            offsetY += cur.top
+            cur = nextParent
+        }
+        return Triple(this, 0, 0)
+    }
+
+    private fun resolveCssLengthPx(length: CssLength, refPx: Int): Int =
+        when (length.unit) {
+            CssUnit.PERCENT -> ((length.value / 100f) * refPx).roundToInt()
+            else -> AndroidViewHandle.dpToPx(length.resolvePx(refPx.toFloat()) ?: 0f)
+        }
+
+    private fun layoutOutOfFlowPositionedChildren(containerW: Int, containerH: Int) {
+        for (i in 0 until childCount) {
+            val child = getChildAt(i) ?: continue
+            if (child.visibility == View.GONE) continue
+            val lp = lpOf(child)
+            if (!lp.isCssOutOfFlow()) continue
+
+            val (cbView, offsetX, offsetY) = resolveContainingBlock(lp.cssPosition)
+            val cbW = cbView.width.takeIf { it > 0 } ?: containerW
+            val cbH = cbView.height.takeIf { it > 0 } ?: containerH
+
+            val leftPx = lp.cssLeft?.let { resolveCssLengthPx(it, cbW) }
+            val rightPx = lp.cssRight?.let { resolveCssLengthPx(it, cbW) }
+            val topPx = lp.cssTop?.let { resolveCssLengthPx(it, cbH) }
+            val bottomPx = lp.cssBottom?.let { resolveCssLengthPx(it, cbH) }
+
+            val targetW = when {
+                lp.width > 0 -> lp.width
+                lp.widthPercent != null -> ((cbW * lp.widthPercent!!) / 100f).roundToInt().coerceAtLeast(0)
+                leftPx != null && rightPx != null -> (cbW - leftPx - rightPx - lp.leftMargin - lp.rightMargin).coerceAtLeast(0)
+                lp.fillWidth && leftPx == null && rightPx == null -> cbW
+                else -> child.measuredWidth
+            }
+            val targetH = when {
+                lp.height > 0 -> lp.height
+                lp.heightPercent != null -> ((cbH * lp.heightPercent!!) / 100f).roundToInt().coerceAtLeast(0)
+                topPx != null && bottomPx != null -> (cbH - topPx - bottomPx - lp.topMargin - lp.bottomMargin).coerceAtLeast(0)
+                lp.fillHeight && topPx == null && bottomPx == null -> cbH
+                else -> child.measuredHeight
+            }
+
+            if (child.measuredWidth != targetW || child.measuredHeight != targetH) {
+                child.measure(
+                    MeasureSpec.makeMeasureSpec(targetW, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(targetH, MeasureSpec.EXACTLY)
+                )
+            }
+
+            val ancX = when {
+                leftPx != null -> leftPx + lp.leftMargin
+                rightPx != null -> cbW - targetW - rightPx - lp.rightMargin
+                else -> paddingLeft + lp.leftMargin + offsetX
+            }
+            val ancY = when {
+                topPx != null -> topPx + lp.topMargin
+                bottomPx != null -> cbH - targetH - bottomPx - lp.bottomMargin
+                else -> paddingTop + lp.topMargin + offsetY
+            }
+
+            val localX = ancX - offsetX
+            val localY = ancY - offsetY
+            child.layout(localX, localY, localX + targetW, localY + targetH)
+        }
+    }
+
+    private fun applyZOrderAndTransformsAfterLayout() {
+        val density = resources?.displayMetrics?.density?.takeIf { it > 0f } ?: AndroidViewHandle.density()
+        for (i in 0 until childCount) {
+            val child = getChildAt(i) ?: continue
+            val lp = lpOf(child)
+            if (lp.layerZIndex != 0 || child.translationZ != 0f) {
+                child.translationZ = lp.layerZIndex.toFloat()
+            }
+            val tf = lp.cssTransform2D
+            val w = child.width
+            val h = child.height
+            if (tf != lp.lastAppliedTransform || w != lp.lastTransformWidth || h != lp.lastTransformHeight) {
+                val (rawDx, rawDy) = tf.resolveTranslationPx(w, h)
+                child.translationX = if (tf.translateXIsPercent) rawDx else rawDx * density
+                child.translationY = if (tf.translateYIsPercent) rawDy else rawDy * density
+                child.scaleX = tf.scaleX
+                child.scaleY = tf.scaleY
+                child.rotation = tf.rotateDeg
+                lp.lastAppliedTransform = tf
+                lp.lastTransformWidth = w
+                lp.lastTransformHeight = h
+            }
         }
     }
 
@@ -836,7 +1040,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         val visibleChildren = ArrayList<View>(childCount)
         for (i in 0 until childCount) {
             val c = getChildAt(i)
-            if (c != null && c.visibility != View.GONE) {
+            if (c != null && c.visibility != View.GONE && !lpOf(c).isCssOutOfFlow()) {
                 visibleChildren.add(c)
             }
         }
@@ -913,7 +1117,7 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
         val visibleChildren = ArrayList<View>(childCount)
         for (i in 0 until childCount) {
             val c = getChildAt(i)
-            if (c != null && c.visibility != View.GONE) {
+            if (c != null && c.visibility != View.GONE && !lpOf(c).isCssOutOfFlow()) {
                 visibleChildren.add(c)
             }
         }
@@ -1052,6 +1256,13 @@ class AndroidFlexContainerView(context: Context) : ViewGroup(context) {
             lp.layerBottomPx = handle.layerBottomPx?.let { AndroidViewHandle.dpToPx(it) }
             lp.layerZIndex = handle.layerZIndex
             lp.layerPassThrough = handle.layerPassThrough
+            lp.cssPointerEventsNone = handle.cssPointerEventsNone
+            lp.cssPosition = handle.cssPosition
+            lp.cssTop = handle.cssTop
+            lp.cssRight = handle.cssRight
+            lp.cssBottom = handle.cssBottom
+            lp.cssLeft = handle.cssLeft
+            lp.cssTransform2D = handle.cssTransform2D
             lp.width = when {
                 lp.fillWidth -> ViewGroup.LayoutParams.MATCH_PARENT
                 handle.hasExplicitPreferredWidth && handle.bounds.width > 0 ->

@@ -47,6 +47,7 @@ import com.nexustools.genericui.nativeimpl.layout.ContainerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.DividerNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ScrollViewNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
+import com.nexustools.genericui.nativeimpl.surface.StyledComponentNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyGridNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.LazyListNativeImpl
 import com.nexustools.genericui.nativeimpl.lazy.TreeViewNativeImpl
@@ -65,6 +66,7 @@ import com.nexustools.genericui.nativeimpl.shell.MenuBarNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.MenuItemNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.MenuNativeImpl
 import com.nexustools.genericui.nativeimpl.shell.WindowNativeImpl
+import com.nexustools.genericui.nativeimpl.system.AnimationNativeImpl
 import com.nexustools.genericui.nativeimpl.system.DatabaseNativeImpl
 import com.nexustools.genericui.nativeimpl.system.NetworkMonitorNativeImpl
 import com.nexustools.genericui.nativeimpl.system.NotificationManagerNativeImpl
@@ -148,6 +150,13 @@ open class IosNativeFactory(
     override fun createStyledContainer(classPrefix: String, tagName: String): StyledContainerNativeImpl<*> =
         IosStyledContainerImpl(
             classPrefix = classPrefix,
+            tagName = tagName,
+            layoutTarget = LayoutBackendTarget.fromBackendTarget(backendTarget)
+        )
+    override fun createStyledComponent(classPrefix: String, tagName: String): StyledComponentNativeImpl<*> =
+        IosStyledComponentImpl(
+            classPrefix = classPrefix,
+            tagName = tagName,
             layoutTarget = LayoutBackendTarget.fromBackendTarget(backendTarget)
         )
     override fun createBookContainer(): BookContainerNativeImpl<*> = IosBookContainerImpl()
@@ -155,7 +164,8 @@ open class IosNativeFactory(
     override fun createDivider(): DividerNativeImpl<*> = IosDividerImpl()
 
     // Typography & Content
-    override fun createText(tagName: String, classPrefix: String): TextNativeImpl<*> = IosTextImpl()
+    override fun createText(tagName: String, classPrefix: String): TextNativeImpl<*> =
+        IosTextImpl(classPrefix = classPrefix)
     override fun createMarkdownView(): MarkdownViewNativeImpl<*> = IosMarkdownViewImpl()
     override fun createImage(): ImageNativeImpl<*> = IosImageImpl()
     override fun createTable(): TableNativeImpl<*> = IosTableImpl()
@@ -201,6 +211,9 @@ open class IosNativeFactory(
 
     override fun createUiTimerScheduler(): UiTimerNativeImpl =
         AppleUiTimerNativeImpl()
+
+    override fun createAnimationScheduler(): AnimationNativeImpl =
+        IosAnimationNativeImpl()
 
     override fun createPermissionManager(): PermissionManagerNativeImpl =
         IosPermissionManagerImpl()

@@ -102,7 +102,7 @@ class AndroidMarkdownViewImpl : AndroidBaseNativeImpl("com.google.android.materi
             val themeColors = activeTheme.resolveEffectiveColors(isDark)
             val defaultTextColor = themeColors.onSurface ?: themeColors.onBackground ?: if (isDark) RgbaColor(235, 235, 240) else RgbaColor(28, 28, 30)
             val textArgb = customStyleTextColor?.toArgbInt()
-                ?: (styleSnapshot.textColorType ?: styleSnapshot.type)?.takeIf { it != BootstrapType.NONE }?.let {
+                ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let {
                     BootstrapColorPalette.resolveColor(it, isDark, activeTheme).toArgbInt()
                 }
                 ?: defaultTextColor.toArgbInt()

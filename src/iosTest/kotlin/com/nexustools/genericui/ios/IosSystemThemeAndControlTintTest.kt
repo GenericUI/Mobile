@@ -2,33 +2,51 @@
 
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.composite.Composite
+import com.nexustools.genericui.component.form.StyledSlider
 import com.nexustools.genericui.component.layout.Column
+import com.nexustools.genericui.component.shell.Window
+import com.nexustools.genericui.component.surface.StyledComponent
+import com.nexustools.genericui.component.tabs.TabPosition
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.core.GenericUiAppDescriptor
+import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
+import com.nexustools.genericui.enums.bootstrap.BootstrapPointerEvents
+import com.nexustools.genericui.enums.bootstrap.BootstrapSize
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.FontWeight
 import com.nexustools.genericui.enums.bootstrap.TextAlignment
 import com.nexustools.genericui.enums.bootstrap.TextTransform
 import com.nexustools.genericui.enums.css.CssFontStyle
+import com.nexustools.genericui.enums.css.CssPosition
 import com.nexustools.genericui.enums.css.CssTextDecoration
+import com.nexustools.genericui.geometry.EdgeInsets
+import com.nexustools.genericui.geometry.Size
+import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
 import com.nexustools.genericui.style.color.RgbaColor
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.CssCornerRadii
 import com.nexustools.genericui.style.css.CssEdgeLengths
 import com.nexustools.genericui.style.css.CssFontFamily
 import com.nexustools.genericui.style.css.CssLength
+import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.theme.ThemeColorSet
 import com.nexustools.genericui.style.theme.ThemeConfig
 import kotlinx.cinterop.DoubleVar
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.useContents
 import kotlinx.cinterop.value
+import platform.CoreGraphics.CGRectMake
 import platform.Foundation.valueForKey
 import platform.UIKit.NSTextAlignmentCenter
 import platform.UIKit.UIButton
+import platform.UIKit.UIButtonConfigurationCornerStyleCapsule
+import platform.UIKit.UIButtonConfigurationSize
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UILabel
+import platform.UIKit.UISegmentedControl
 import platform.UIKit.UIView
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -48,15 +66,15 @@ class IosSystemThemeAndControlTintTest {
     }
 
     @Test
-    fun buttonUsesSystemDefaultWhenNoneAndOffscreenSpriteTintWhenTyped() {
+    fun buttonUsesSystemDefaultWhenNoneAndNativeUiButtonConfigurationWhenTyped() {
         com.nexustools.genericui.component.shell.Application.current?.dispose()
         val btn = IosButtonImpl()
         btn.setText("Done")
         btn.setType(BootstrapType.NONE)
         val uiButton = btn.nativeWidget.uiView as UIButton
         assertEquals("Done", uiButton.titleForState(UIControlStateNormal))
+        assertNull(uiButton.configuration)
         assertNull(uiButton.backgroundImageForState(UIControlStateNormal))
-        assertNull(btn.lastOffscreenTintedPixels)
 
         val customPrimary = RgbaColor(195, 38, 88, 255)
         val app = IosApplicationImpl()
@@ -68,13 +86,53 @@ class IosSystemThemeAndControlTintTest {
         assertEquals(customTheme, app.getThemeConfig())
 
         btn.setType(BootstrapType.PRIMARY)
-        assertNotNull(uiButton.backgroundImageForState(UIControlStateNormal))
-        val pixels = btn.lastOffscreenTintedPixels
-        assertNotNull(pixels)
-        val centerArgb = pixels[(pixels.size / 2)]
-        val r = (centerArgb ushr 16) and 0xFF
-        val b = centerArgb and 0xFF
-        assertTrue(r > 130 && b > 35, "Offscreen tinted UIButton sprite pixels should reflect custom ThemeConfig primary (r=$r, b=$b)")
+        val filledConfig = assertNotNull(uiButton.configuration)
+        assertEquals("Done", filledConfig.title)
+        assertNull(uiButton.backgroundImageForState(UIControlStateNormal))
+        assertRedGreenBlue(
+            assertNotNull(filledConfig.baseBackgroundColor),
+            195.0 / 255.0,
+            38.0 / 255.0,
+            88.0 / 255.0
+        )
+        assertNotNull(filledConfig.baseForegroundColor)
+
+        btn.setOutline(true)
+        btn.setBorderRadius(BorderRadiusStyle.PILL)
+        btn.setSize(BootstrapSize.LARGE)
+        val outlineConfig = assertNotNull(uiButton.configuration)
+        assertEquals(UIButtonConfigurationCornerStyleCapsule, outlineConfig.cornerStyle)
+        assertEquals(UIButtonConfigurationSize.UIButtonConfigurationSizeLarge, outlineConfig.buttonSize)
+        assertEquals(1.5, outlineConfig.background.strokeWidth)
+        assertRedGreenBlue(
+            assertNotNull(outlineConfig.background.strokeColor),
+            195.0 / 255.0,
+            38.0 / 255.0,
+            88.0 / 255.0
+        )
+        assertRedGreenBlue(
+            assertNotNull(outlineConfig.baseForegroundColor),
+            195.0 / 255.0,
+            38.0 / 255.0,
+            88.0 / 255.0
+        )
+
+        btn.setType(BootstrapType.LINK)
+        btn.setOutline(false)
+        btn.setBorderRadius(null)
+        val linkConfig = assertNotNull(uiButton.configuration)
+        assertRedGreenBlue(
+            assertNotNull(linkConfig.baseForegroundColor),
+            195.0 / 255.0,
+            38.0 / 255.0,
+            88.0 / 255.0
+        )
+
+        btn.setType(BootstrapType.NONE)
+        assertNull(uiButton.configuration)
+        assertNull(uiButton.backgroundImageForState(UIControlStateNormal))
+        assertEquals("Done", uiButton.titleForState(UIControlStateNormal))
+        btn.dispose()
         app.dispose()
     }
 
@@ -204,5 +262,254 @@ class IosSystemThemeAndControlTintTest {
         assertTrue(kotlin.math.abs(r.value - er) < 0.02)
         assertTrue(kotlin.math.abs(g.value - eg) < 0.02)
         assertTrue(kotlin.math.abs(b.value - eb) < 0.02)
+    }
+
+    @Test
+    fun strictBootstrapTypePolicyPermitsButtonsAndNonControlsOnlyWhileStyledControlsIgnoreBootstrapType() {
+        com.nexustools.genericui.component.shell.Application.current?.dispose()
+        val prevFactory = GenericUI.activeFactory
+        val factory = IosNativeFactory()
+        GenericUI.initialize(factory)
+
+        val customPrimary = RgbaColor(195, 38, 88, 255)
+        val app = IosApplicationImpl()
+        try {
+            app.setThemeConfig(
+                ThemeConfig(
+                    lightColors = ThemeColorSet(primary = customPrimary),
+                    darkColors = ThemeColorSet(primary = customPrimary)
+                )
+            )
+
+            // Button & StyledButton DO reflect BootstrapType
+            val btn = IosButtonImpl()
+            btn.setType(BootstrapType.PRIMARY)
+            assertNotNull(btn.button.configuration)
+            assertRedGreenBlue(
+                assertNotNull(btn.button.configuration?.baseBackgroundColor),
+                195.0 / 255.0,
+                38.0 / 255.0,
+                88.0 / 255.0
+            )
+            btn.dispose()
+
+            // Non-control Bootstrap components (Badge, Card) DO reflect BootstrapType
+            val badge = IosTextImpl(classPrefix = "badge")
+            badge.setType(BootstrapType.DANGER)
+            assertNotNull(badge.nativeWidget.uiView.backgroundColor)
+
+            val card = IosStyledContainerImpl(classPrefix = "card", tagName = "genericui:card")
+            card.setType(BootstrapType.PRIMARY)
+            assertNotNull(card.nativeWidget.uiView.backgroundColor)
+
+            // DropdownButton MUST ignore BootstrapType on iOS
+            val dropdown = IosDropdownImpl()
+            dropdown.setLabel("Actions")
+            dropdown.setType(BootstrapType.PRIMARY)
+            assertNull(dropdown.button.backgroundImageForState(UIControlStateNormal))
+            assertNull(dropdown.button.configuration)
+
+            val pb = IosProgressBarImpl()
+            pb.setProgress(0.5f)
+            pb.setType(BootstrapType.DANGER)
+            assertNull(pb.progressView.progressTintColor)
+            assertNull(pb.nativeWidget.uiView.backgroundColor)
+
+            val slider = IosRangeSliderImpl()
+            slider.setType(BootstrapType.DANGER)
+            assertNull(slider.slider.minimumTrackTintColor)
+            assertNull(slider.nativeWidget.uiView.backgroundColor)
+
+            val tc = IosTabContainerImpl()
+            tc.setType(BootstrapType.DANGER)
+            tc.setBackgroundType(BootstrapType.WARNING)
+            assertNotNull(tc.segmentedControl)
+            assertNull(tc.nativeWidget.uiView.backgroundColor)
+
+            val t0 = IosTabImpl().apply { setTitleNative("Home") }
+            val t1 = IosTabImpl().apply { setTitleNative("Profile") }
+            tc.addTabNative(t0, IosContainerImpl(), -1)
+            tc.addTabNative(t1, IosContainerImpl(), -1)
+            assertEquals(2, tc.segmentedControl.numberOfSegments.toInt())
+            assertEquals("Home", tc.segmentedControl.titleForSegmentAtIndex(0uL))
+            assertEquals("Profile", tc.segmentedControl.titleForSegmentAtIndex(1uL))
+            assertEquals(0, tc.segmentedControl.selectedSegmentIndex.toInt())
+
+            tc.setSelectedTabIndex(1, fadeTransition = false)
+            assertEquals(1, tc.getSelectedTabIndex())
+            assertEquals(1, tc.segmentedControl.selectedSegmentIndex.toInt())
+
+            tc.setTabPositionNative(TabPosition.BOTTOM)
+            tc.segmentedControl.frame.useContents {
+                assertEquals(32.0, size.height)
+                assertTrue(origin.y > 0.0)
+            }
+            tc.setTabPositionNative(TabPosition.TOP)
+            tc.segmentedControl.frame.useContents {
+                assertEquals(32.0, size.height)
+                assertEquals(0.0, origin.y)
+            }
+
+            // StyledComponent / StyledContainer / Composite / StyledSlider / Text(non-badge) / Controls MUST ignore BootstrapType
+            val composite = object : Composite() {}.apply { type = BootstrapType.DANGER }
+            val styledSlider = StyledSlider().apply { type = BootstrapType.DANGER }
+            val styledCompComp = StyledComponent().apply { type = BootstrapType.DANGER }
+            val host = Column().apply {
+                addChild(composite)
+                addChild(styledSlider)
+                addChild(styledCompComp)
+            }
+            val win = Window("iOSPolicy").apply { setContent(host) }
+            win.show(factory)
+
+            val compositeImpl = composite.ensureNativeImpl() as IosStyledContainerImpl
+            assertNull(compositeImpl.nativeWidget.uiView.backgroundColor)
+
+            val sliderImpl = styledSlider.ensureNativeImpl() as IosStyledContainerImpl
+            assertNull(sliderImpl.nativeWidget.uiView.backgroundColor)
+
+            val scImpl = styledCompComp.ensureNativeImpl() as IosStyledComponentImpl
+            assertNull(scImpl.nativeWidget.uiView.backgroundColor)
+            assertNull(scImpl.resolveCurrentVisuals().backgroundColor)
+            win.dispose()
+
+            val untinted = listOf<IosBaseNativeImpl>(
+                IosDropdownImpl(),
+                IosScrollViewImpl(),
+                IosCheckboxImpl(),
+                IosContainerImpl(),
+                IosStyledContainerImpl(),
+                IosStyledComponentImpl(),
+                IosTextImpl()
+            )
+            for (ctrl in untinted) {
+                ctrl.setType(BootstrapType.DANGER)
+                ctrl.setBackgroundType(BootstrapType.SUCCESS)
+                ctrl.setBorderType(BootstrapType.WARNING)
+                val bg = ctrl.nativeWidget.uiView.backgroundColor
+                assertTrue(
+                    bg == null || bg == platform.UIKit.UIColor.clearColor,
+                    "${ctrl::class.simpleName} must ignore BootstrapType on iOS (got $bg)"
+                )
+                assertEquals(0.0, ctrl.nativeWidget.caLayer.borderWidth)
+            }
+        } finally {
+            app.dispose()
+            if (prevFactory != null) GenericUI.initialize(prevFactory)
+        }
+    }
+
+    @Test
+    fun iosStyledComponentProximalRelativeWindowAbsoluteSignedTransformZPositionAndPointerEventsPassThrough() {
+        val factory = IosNativeFactory()
+        val sc = factory.createStyledComponent("styled-component", "genericui:styled-component") as IosStyledComponentImpl
+        sc.setStyledVisuals(StyledVisualSpec(backgroundColor = RgbaColor(20, 40, 60, 255)))
+        sc.setHoverVisuals(StyledVisualSpec(backgroundColor = RgbaColor(40, 80, 120, 255)))
+        sc.setActiveVisuals(StyledVisualSpec(backgroundColor = RgbaColor(10, 15, 20, 255)))
+        sc.setDisabledVisuals(StyledVisualSpec(backgroundColor = RgbaColor(128, 128, 128, 255)))
+        assertEquals(RgbaColor(20, 40, 60, 255), sc.resolveCurrentVisuals().backgroundColor)
+        sc.setHoveredState(true)
+        assertEquals(RgbaColor(40, 80, 120, 255), sc.resolveCurrentVisuals().backgroundColor)
+        sc.setActivePressedState(true)
+        assertEquals(RgbaColor(10, 15, 20, 255), sc.resolveCurrentVisuals().backgroundColor)
+        sc.setEnabled(false)
+        assertEquals(RgbaColor(128, 128, 128, 255), sc.resolveCurrentVisuals().backgroundColor)
+        sc.setEnabled(true)
+
+        // pointer-events: none sets userInteractionEnabled = false and preserves it across setEnabled(true)
+        sc.applyComponentBootstrap(ComponentBootstrap().apply { setPointerEvents(BootstrapPointerEvents.NONE) })
+        assertFalse(sc.nativeWidget.uiView.userInteractionEnabled)
+        sc.setEnabled(true)
+        assertFalse(sc.nativeWidget.uiView.userInteractionEnabled, "pointer-events: none must stay false across setEnabled(true)")
+
+        // Proximal position: relative ancestor + signed transform + zPosition + subview ordering
+        val relAncestor = IosContainerImpl()
+        relAncestor.applyComponentStyle(ComponentStyle().apply {
+            setPosition(CssPosition.RELATIVE)
+            setWidth(CssLength.px(400f))
+            setHeight(CssLength.px(300f))
+        })
+        relAncestor.nativeWidget.uiView.setFrame(CGRectMake(0.0, 0.0, 400.0, 300.0))
+
+        val staticMid = IosContainerImpl()
+        staticMid.setMargin(EdgeInsets(50, 0, 0, 20))
+        staticMid.setPreferredSize(Size(300, 200))
+
+        val lowerZ = IosStyledComponentImpl()
+        lowerZ.applyComponentStyle(ComponentStyle().apply {
+            setPosition(CssPosition.ABSOLUTE)
+            setTop(CssLength.px(20f))
+            setRight(CssLength.px(10f))
+            setZIndex(5)
+            setWidth(CssLength.px(80f))
+            setHeight(CssLength.px(30f))
+        })
+
+        val upperZ = IosStyledComponentImpl()
+        upperZ.applyComponentStyle(ComponentStyle().apply {
+            setPosition(CssPosition.ABSOLUTE)
+            setTop(CssLength.px(20f))
+            setRight(CssLength.px(10f))
+            setZIndex(25)
+            setWidth(CssLength.px(80f))
+            setHeight(CssLength.px(30f))
+            setTransform(
+                com.nexustools.genericui.style.transition.CssTransform2D(
+                    translateX = -10f,
+                    translateY = -5f,
+                    scaleX = 1.25f
+                )
+            )
+        })
+
+        staticMid.addChildNative(upperZ, -1)
+        staticMid.addChildNative(lowerZ, -1)
+        relAncestor.addChildNative(staticMid, -1)
+
+        relAncestor.nativeWidget.uiView.layoutIfNeeded()
+        staticMid.nativeWidget.uiView.layoutIfNeeded()
+
+        assertEquals(25.0, upperZ.nativeWidget.caLayer.zPosition)
+        assertEquals(5.0, lowerZ.nativeWidget.caLayer.zPosition)
+        // Highest zIndex must be last subview on UIView for hitTest priority
+        val managedSubs = staticMid.nativeWidget.uiView.subviews
+        assertEquals(upperZ.nativeWidget.uiView, managedSubs.last())
+
+        // Signed transform applied cleanly as CGAffineTransform (tx = -10, ty = -5, a = 1.25)
+        upperZ.nativeWidget.uiView.transform.useContents {
+            assertEquals(1.25, a, 0.01)
+            assertEquals(-10.0, tx, 0.01)
+            assertEquals(-5.0, ty, 0.01)
+        }
+        // Center frame matches proximal relative (right: 10, top: 20 inside 400x300 minus mid origin (20, 50)) -> local origin (290, -30), center (330, -15)
+        upperZ.nativeWidget.uiView.center.useContents {
+            assertEquals(330.0, x, 0.5)
+            assertEquals(-15.0, y, 0.5)
+        }
+
+        // Window-level position: absolute anchored to IosWindowImpl contentHostView
+        val win = IosWindowImpl()
+        win.setWindowSize(Size(800, 600))
+        val winAbs = IosStyledComponentImpl()
+        winAbs.applyComponentStyle(ComponentStyle().apply {
+            setPosition(CssPosition.ABSOLUTE)
+            setTop(CssLength.px(20f))
+            setLeft(CssLength.percent(50f))
+            setWidth(CssLength.px(100f))
+            setHeight(CssLength.px(40f))
+            setTransform(
+                com.nexustools.genericui.style.transition.CssTransform2D(
+                    translateX = -50f,
+                    translateXIsPercent = true
+                )
+            )
+        })
+        win.addChildNative(winAbs, -1)
+        val contentHost = winAbs.nativeWidget.uiView.superview!!
+        contentHost.layoutIfNeeded()
+        winAbs.nativeWidget.uiView.transform.useContents {
+            assertEquals(-50.0, tx, 0.01)
+        }
+        win.dispose()
     }
 }

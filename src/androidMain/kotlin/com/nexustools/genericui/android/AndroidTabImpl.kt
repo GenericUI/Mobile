@@ -22,9 +22,7 @@ import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.AppCompatImageView
 import com.nexustools.genericui.component.tabs.TabIconPlacement
 import com.nexustools.genericui.core.NativeImpl
-import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
-import com.nexustools.genericui.style.color.BootstrapColorPalette
 
 /**
  * Android tab header view implementation of [TabNativeImpl], rendering icon, pin indicator,
@@ -238,7 +236,12 @@ class AndroidTabImpl(
         edit.setText(titleVal)
         label.visibility = View.GONE
         edit.visibility = View.VISIBLE
-        edit.requestFocus()
+        val canFocus = isFocusable()
+        edit.isFocusable = canFocus
+        edit.isFocusableInTouchMode = canFocus
+        if (canFocus) {
+            edit.requestFocus()
+        }
         edit.selectAll()
     }
 
@@ -388,18 +391,16 @@ class AndroidTabImpl(
                 }
                 val ctx = (nativeWidget.androidView?.context) ?: AndroidViewHandle.activeContext
                 val isDark = AndroidViewHandle.isDarkTheme()
-                val textColor = if (selectedVal) {
-                    BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, isDark).toArgbInt()
-                } else if (isDark) {
-                    0xFFECEFF4.toInt()
-                } else {
-                    0xFF1C1B1F.toInt()
+                val textColor = when {
+                    selectedVal -> if (isDark) 0xFFD0BCFF.toInt() else 0xFF6750A4.toInt()
+                    isDark -> 0xFFECEFF4.toInt()
+                    else -> 0xFF1C1B1F.toInt()
                 }
 
                 pinIndicatorView?.visibility = if (pinnedVal) View.VISIBLE else View.GONE
                 dirtyIndicatorView?.apply {
                     visibility = if (dirtyVal) View.VISIBLE else View.GONE
-                    setTextColor(BootstrapColorPalette.resolveColor(BootstrapType.WARNING, isDark).toArgbInt())
+                    setTextColor(if (isDark) 0xFFF2B8B5.toInt() else 0xFF7D5260.toInt())
                 }
 
                 val hasCustom = customHeaderImpl != null
@@ -438,15 +439,7 @@ class AndroidTabImpl(
                     if (!bText.isNullOrEmpty()) {
                         bv.text = bText
                         bv.visibility = View.VISIBLE
-                        val badgeType = when (badgeVariantVal.lowercase()) {
-                            "danger", "error" -> BootstrapType.DANGER
-                            "success" -> BootstrapType.SUCCESS
-                            "warning" -> BootstrapType.WARNING
-                            "secondary" -> BootstrapType.SECONDARY
-                            "info" -> BootstrapType.INFO
-                            else -> BootstrapType.PRIMARY
-                        }
-                        val pillColor = BootstrapColorPalette.resolveColor(badgeType, isDark).toArgbInt()
+                        val pillColor = if (isDark) 0xFFD0BCFF.toInt() else 0xFF6750A4.toInt()
                         bv.background = GradientDrawable().apply {
                             shape = GradientDrawable.RECTANGLE
                             cornerRadius = AndroidViewHandle.dpToPxFloat(10f)

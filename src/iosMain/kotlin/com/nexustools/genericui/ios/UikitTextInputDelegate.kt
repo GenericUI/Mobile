@@ -18,7 +18,8 @@ class UikitTextInputDelegate : NSObject(), UITextFieldDelegateProtocol, UITextVi
     var onSubmit: ((String) -> Unit)? = null
     var onFocusChanged: ((Boolean) -> Unit)? = null
 
-    override fun textFieldShouldBeginEditing(textField: UITextField): Boolean = !isReadOnly
+    override fun textFieldShouldBeginEditing(textField: UITextField): Boolean =
+        !isReadOnly && UikitFocusRegistry.isEffectivelyFocusable(textField)
 
     override fun textFieldDidBeginEditing(textField: UITextField) {
         onFocusChanged?.invoke(true)
@@ -34,7 +35,8 @@ class UikitTextInputDelegate : NSObject(), UITextFieldDelegateProtocol, UITextVi
         return true
     }
 
-    override fun textViewShouldBeginEditing(textView: UITextView): Boolean = !isReadOnly
+    override fun textViewShouldBeginEditing(textView: UITextView): Boolean =
+        !isReadOnly && UikitFocusRegistry.isEffectivelyFocusable(textView)
 
     override fun textViewDidBeginEditing(textView: UITextView) {
         onFocusChanged?.invoke(true)

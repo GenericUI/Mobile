@@ -14,7 +14,6 @@ import com.nexustools.genericui.component.fragment.IFragment
 import com.nexustools.genericui.component.fragment.helper.FragmentHostFragment
 import com.nexustools.genericui.core.GenericUiAppDescriptor
 import com.nexustools.genericui.enums.dialog.FileBrowserMode
-import com.nexustools.genericui.enums.fragment.FragmentLaunchMode
 import com.nexustools.genericui.mobile.system.MobileDocumentPickerBridge
 import com.nexustools.genericui.window.IWindow
 import kotlinx.coroutines.CompletableDeferred
@@ -24,7 +23,7 @@ import kotlin.reflect.KClass
 /**
  * Registry mapping GenericUI [IFragment] classes 1:1 to generated or registered Android
  * [GenericUiFragmentActivity] classes, and implementing [FragmentPlatformLauncher] so
- * `launchFragment(...)` starts the corresponding Android `Activity` with serialized [FragmentBundle] extras.
+ * `startFragment(...)` starts the corresponding Android `Activity` with serialized [FragmentBundle] extras.
  *
  * Also coordinates host [Activity] resolution, runtime permission launchers, and Storage Access Framework
  * (`Intent.ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE`) results.
@@ -37,6 +36,7 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
     const val EXTRA_KEY_PREFIX: String = "genericui:arg:"
 
     private val activityMap = mutableMapOf<KClass<out IFragment>, Class<out GenericUiFragmentActivity>>()
+    private val fragmentIdActivityMap = mutableMapOf<String, Class<*>>()
     private val safBridge = MobileDocumentPickerBridge()
 
     private var activeFragmentActivityRef: WeakReference<GenericUiFragmentActivity>? = null
@@ -57,7 +57,11 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
         private set
     var lastLaunchedArgs: FragmentBundle? = null
         private set
-    var lastLaunchedMode: FragmentLaunchMode? = null
+    var lastLaunchedOpenAdditionalWindow: Boolean = false
+        private set
+    var lastLaunchedClearTask: Boolean = false
+        private set
+    var lastLaunchedIsDialog: Boolean = false
         private set
 
     internal var pendingLaunchBundle: FragmentBundle? = null
@@ -227,6 +231,7 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
         isMain: Boolean = false
     ) {
         activityMap[fragmentClass] = activityClass
+        fragmentClass.qualifiedName?.let { registerFragmentId(it, activityClass) }
         if (isMain || mainFragmentClass == null && isMain) {
             mainFragmentClass = fragmentClass
             mainActivityClass = activityClass
@@ -234,10 +239,46 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
     }
 
     /**
+     * Registers a string canonical [fragmentId] to Android [activityClass] mapping so
+     * background / ServiceWorker launches can resolve an Activity by fragment ID.
+     */
+    fun registerFragmentId(fragmentId: String, activityClass: Class<*>) {
+        val normalized = fragmentId.trim()
+        if (normalized.isNotEmpty()) {
+            fragmentIdActivityMap[normalized] = activityClass
+        }
+    }
+
+    /**
+     * Resolves a registered Android `Activity` class matching [fragmentId], or `null` if unknown.
+     */
+    fun resolveByFragmentId(fragmentId: String): Class<*>? {
+        val normalized = fragmentId.trim()
+        if (normalized.isEmpty()) return null
+        fragmentIdActivityMap[normalized]?.let { return it }
+        val dotSuffix = ".$normalized"
+        val suffixMatches = fragmentIdActivityMap.entries
+            .filter { (key, _) -> key.endsWith(dotSuffix) }
+            .map { it.value }
+        if (suffixMatches.size == 1) {
+            return suffixMatches.single()
+        }
+        return activityMap.entries.firstOrNull { (kClass, _) ->
+            kClass.qualifiedName == normalized ||
+                (kClass.simpleName == normalized &&
+                    activityMap.keys.count { it.simpleName == normalized } == 1)
+        }?.value
+    }
+
+    /**
      * Removes the registration for [fragmentClass], if present.
      */
     fun unregister(fragmentClass: KClass<out IFragment>) {
-        activityMap.remove(fragmentClass)
+        val removedActivity = activityMap.remove(fragmentClass)
+        val qualified = fragmentClass.qualifiedName
+        if (qualified != null && fragmentIdActivityMap[qualified] == removedActivity) {
+            fragmentIdActivityMap.remove(qualified)
+        }
         if (mainFragmentClass == fragmentClass) {
             mainFragmentClass = null
             mainActivityClass = null
@@ -285,6 +326,7 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
      */
     fun clear() {
         activityMap.clear()
+        fragmentIdActivityMap.clear()
         mainFragmentClass = null
         mainActivityClass = null
         activeDescriptor = null
@@ -292,7 +334,9 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
         lastLaunchedFragmentClass = null
         lastLaunchedActivityClass = null
         lastLaunchedArgs = null
-        lastLaunchedMode = null
+        lastLaunchedOpenAdditionalWindow = false
+        lastLaunchedClearTask = false
+        lastLaunchedIsDialog = false
         pendingLaunchBundle = null
         activeFragmentActivityRef = null
         synchronized(legacyPermissionCallbacks) { legacyPermissionCallbacks.clear() }
@@ -304,12 +348,16 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
     override fun launch(
         fragmentClass: KClass<out IFragment>,
         launchArgs: FragmentBundle?,
-        launchMode: FragmentLaunchMode,
+        openAdditionalWindow: Boolean,
+        clearTask: Boolean,
+        isDialog: Boolean,
         sourceWindow: IWindow?
     ): Boolean = launchByClass(
         fragmentClass = fragmentClass,
         launchArgs = launchArgs,
-        launchMode = launchMode,
+        openAdditionalWindow = openAdditionalWindow,
+        clearTask = clearTask,
+        isDialog = isDialog,
         sourceWindow = sourceWindow
     )
 
@@ -319,17 +367,20 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
     fun launchByClass(
         fragmentClass: KClass<out IFragment>,
         launchArgs: FragmentBundle? = null,
-        launchMode: FragmentLaunchMode = FragmentLaunchMode.SAME_WINDOW,
+        openAdditionalWindow: Boolean = false,
+        clearTask: Boolean = false,
+        isDialog: Boolean = false,
         sourceWindow: IWindow? = null
     ): Boolean {
+        if (isDialog && resolveActiveActivity() != null) {
+            return false
+        }
+        if (isDialog && !activityMap.containsKey(fragmentClass)) {
+            return false
+        }
         val inFragmentHostFragment = sourceWindow?.activeFragment is FragmentHostFragment
         if (inFragmentHostFragment && !activityMap.containsKey(fragmentClass)) {
             return false
-        }
-        if (launchMode == FragmentLaunchMode.NEW_DIALOG_WINDOW || launchMode == FragmentLaunchMode.NEW_PANEL_WINDOW) {
-            if (!activityMap.containsKey(fragmentClass)) {
-                return false
-            }
         }
         val context: Context? = resolveActiveActivity() ?: AndroidViewHandle.activeContext
         if (activityMap.isEmpty() && context == null) {
@@ -340,10 +391,12 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
         lastLaunchedFragmentClass = fragmentClass
         lastLaunchedActivityClass = activityClass
         lastLaunchedArgs = launchArgs
-        lastLaunchedMode = launchMode
+        lastLaunchedOpenAdditionalWindow = openAdditionalWindow
+        lastLaunchedClearTask = clearTask
+        lastLaunchedIsDialog = isDialog
         pendingLaunchBundle = launchArgs
 
-        val intent = buildActivityIntent(context, activityClass, launchArgs, launchMode)
+        val intent = buildActivityIntent(context, activityClass, launchArgs, clearTask)
         lastLaunchedIntent = intent
 
         if (context != null && intent != null) {
@@ -360,23 +413,27 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
     fun launchInstance(
         fragment: IFragment,
         launchArgs: FragmentBundle? = fragment.arguments,
-        launchMode: FragmentLaunchMode = FragmentLaunchMode.SAME_WINDOW,
+        openAdditionalWindow: Boolean = false,
+        clearTask: Boolean = false,
+        isDialog: Boolean = false,
         sourceWindow: IWindow? = fragment.hostingWindow
     ): Boolean = launchByClass(
         fragmentClass = fragment::class,
         launchArgs = launchArgs ?: fragment.arguments,
-        launchMode = launchMode,
+        openAdditionalWindow = openAdditionalWindow,
+        clearTask = clearTask,
+        isDialog = isDialog,
         sourceWindow = sourceWindow
     )
 
     /**
-     * Builds an Android [Intent] targeting [activityClass] with [launchArgs] extras and [launchMode] flags.
+     * Builds an Android [Intent] targeting [activityClass] with [launchArgs] extras and task flags.
      */
     fun buildActivityIntent(
         context: Context?,
         activityClass: Class<out GenericUiFragmentActivity>,
         launchArgs: FragmentBundle?,
-        launchMode: FragmentLaunchMode
+        clearTask: Boolean = false
     ): Intent? {
         return runCatching {
             val intent = if (context != null) {
@@ -384,7 +441,7 @@ object AndroidActivityRegistry : FragmentPlatformLauncher {
             } else {
                 Intent()
             }
-            if (launchMode == FragmentLaunchMode.CLEAR_TASK) {
+            if (clearTask) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
             } else if (context != null && context !is Activity) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

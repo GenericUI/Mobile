@@ -11,6 +11,7 @@ import kotlinx.cinterop.ObjCAction
 import kotlinx.cinterop.useContents
 import platform.CoreGraphics.CGSize
 import platform.Foundation.NSSelectorFromString
+import platform.UIKit.UIFocusUpdateContext
 import platform.UIKit.UIKeyCommand
 import platform.UIKit.UIMenuBuilderProtocol
 import platform.UIKit.UIPress
@@ -23,6 +24,7 @@ import platform.UIKit.UIView
 import platform.UIKit.UIViewController
 import platform.UIKit.UIViewControllerTransitionCoordinatorProtocol
 import platform.UIKit.addKeyCommand
+import platform.UIKit.nextFocusedView
 import platform.UIKit.removeKeyCommand
 
 /**
@@ -137,6 +139,14 @@ class GenericUiRootViewController(
     override fun pressesEnded(presses: Set<*>, withEvent: UIPressesEvent?) {
         dispatchKeyPresses(presses, isDown = false)
         super.pressesEnded(presses, withEvent)
+    }
+
+    override fun shouldUpdateFocusInContext(context: UIFocusUpdateContext): Boolean {
+        val nextView = context.nextFocusedView
+        if (nextView != null && !UikitFocusRegistry.isEffectivelyFocusable(nextView)) {
+            return false
+        }
+        return super.shouldUpdateFocusInContext(context)
     }
 
     private fun dispatchKeyPresses(presses: Set<*>, isDown: Boolean) {

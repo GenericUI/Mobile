@@ -18,9 +18,12 @@ import platform.CoreGraphics.CGContextRelease
 import platform.CoreGraphics.CGImageAlphaInfo
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.kCGBitmapByteOrder32Big
+import platform.Foundation.NSThread
 import platform.UIKit.UIImageView
 import platform.UIKit.UIView
 import platform.UIKit.UIViewContentMode
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 /**
  * Base UIKit container implementation of [AbstractContainerNativeImpl] supporting real child
@@ -29,8 +32,9 @@ import platform.UIKit.UIViewContentMode
  */
 open class IosBaseContainerNativeImpl(
     nativeWidget: UikitViewHandle = UikitViewHandle(UikitFlexContainerView()),
-    componentClassPrefix: String = "container"
-) : IosBaseNativeImpl(nativeWidget, componentClassPrefix), AbstractContainerNativeImpl<UikitViewHandle> {
+    componentClassPrefix: String = "container",
+    initialTagName: String = ""
+) : IosBaseNativeImpl(nativeWidget, componentClassPrefix, initialTagName), AbstractContainerNativeImpl<UikitViewHandle> {
 
     protected val childImpls: MutableList<NativeImpl<*>> = mutableListOf()
     private var animationOverlayView: UIImageView? = null
@@ -133,20 +137,40 @@ open class IosBaseContainerNativeImpl(
 
     override fun presentAnimatedBuffer(buffer: ImageBuffer, frameState: ContainerAnimationFrameState) {
         val image = UikitGeometryAndColorUtil.imageBufferToUiImage(buffer) ?: return
-        val overlay = animationOverlayView ?: UIImageView(frame = uiView.bounds).apply {
-            contentMode = UIViewContentMode.UIViewContentModeScaleToFill
-            userInteractionEnabled = false
-            uiView.addSubview(this)
-            animationOverlayView = this
+        val applyOverlay = {
+            if (!isDisposed) {
+                val overlay = animationOverlayView ?: UIImageView(frame = uiView.bounds).apply {
+                    contentMode = UIViewContentMode.UIViewContentModeScaleToFill
+                    userInteractionEnabled = false
+                    uiView.addSubview(this)
+                    animationOverlayView = this
+                }
+                overlay.setFrame(uiView.bounds)
+                overlay.image = image
+                overlay.alpha = frameState.opacity.coerceIn(0f, 1f).toDouble()
+                overlay.hidden = false
+            }
         }
-        overlay.setFrame(uiView.bounds)
-        overlay.image = image
-        overlay.alpha = frameState.opacity.coerceIn(0f, 1f).toDouble()
-        overlay.hidden = false
+        if (NSThread.isMainThread) {
+            applyOverlay()
+        } else {
+            dispatch_async(dispatch_get_main_queue()) {
+                applyOverlay()
+            }
+        }
     }
 
     override fun releaseAnimatedBuffer() {
-        animationOverlayView?.removeFromSuperview()
-        animationOverlayView = null
+        val clearOverlay = {
+            animationOverlayView?.removeFromSuperview()
+            animationOverlayView = null
+        }
+        if (NSThread.isMainThread) {
+            clearOverlay()
+        } else {
+            dispatch_async(dispatch_get_main_queue()) {
+                clearOverlay()
+            }
+        }
     }
 }

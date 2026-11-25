@@ -18,16 +18,13 @@ import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.RequiresApi
+import com.nexustools.genericui.jvm.style.JvmBackdropCapturePlan
+import com.nexustools.genericui.jvm.style.JvmBackdropCapturePlanner
 import com.nexustools.genericui.style.css.CssFilter
-import com.nexustools.genericui.style.css.CssLength
 import java.lang.ref.WeakReference
-import kotlin.math.PI
-import kotlin.math.ceil
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
  * Shared real-time backdrop blur & filter controller for [AndroidFlexContainerView] and
@@ -109,10 +106,14 @@ class AndroidHardwareBackdropBlurController(
             val rootGroup = resolveBackdropRootView() ?: return
             val path = buildAncestorPath(rootGroup) ?: return
             val relOffset = computeHostOffsetInRoot(path)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canvas.isHardwareAccelerated) {
-                drawHardwareApi31(canvas, effFilter, rootGroup, path, relOffset.first, relOffset.second, w, h)
+            val plan = JvmBackdropCapturePlanner.planCapture(effFilter, w, h, minHardwareBlurPx = 0.5f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                canvas.isHardwareAccelerated &&
+                !plan.hasDropShadow
+            ) {
+                drawHardwareApi31(canvas, effFilter, plan, rootGroup, path, relOffset.first, relOffset.second, w, h)
             } else {
-                drawDownsampledFallback(canvas, effFilter, rootGroup, path, relOffset.first, relOffset.second, w, h)
+                drawDownsampledFallback(canvas, plan, rootGroup, path, relOffset.first, relOffset.second, w, h)
             }
         } finally {
             activeSet.remove(hostView)
@@ -147,6 +148,7 @@ class AndroidHardwareBackdropBlurController(
     private fun drawHardwareApi31(
         canvas: Canvas,
         effFilter: CssFilter,
+        plan: JvmBackdropCapturePlan,
         rootGroup: ViewGroup,
         path: List<View>,
         hostX: Float,
@@ -154,8 +156,8 @@ class AndroidHardwareBackdropBlurController(
         width: Int,
         height: Int
     ) {
-        val blurPx = (effFilter.blur?.resolvePx() ?: 0f).coerceIn(0f, 48f)
-        val pad = if (blurPx > 0f) ceil(blurPx * 1.5f).toInt().coerceIn(0, 48) else 0
+        val blurPx = plan.blurPx
+        val pad = plan.blurPaddingPx
         val recW = width + pad * 2
         val recH = height + pad * 2
 
@@ -194,7 +196,7 @@ class AndroidHardwareBackdropBlurController(
             null
         }
         if (effFilter.hasPixelOps) {
-            val matrix = buildColorMatrix(effFilter)
+            val matrix = JvmBackdropCapturePlanner.buildAndroidColorMatrix20(effFilter)?.let { ColorMatrix(it) }
             if (matrix != null) {
                 val colorFilter = ColorMatrixColorFilter(matrix)
                 effect = if (effect != null) {
@@ -211,7 +213,7 @@ class AndroidHardwareBackdropBlurController(
 
     private fun drawDownsampledFallback(
         canvas: Canvas,
-        effFilter: CssFilter,
+        plan: JvmBackdropCapturePlan,
         rootGroup: ViewGroup,
         path: List<View>,
         hostX: Float,
@@ -219,14 +221,9 @@ class AndroidHardwareBackdropBlurController(
         width: Int,
         height: Int
     ) {
-        val blurPx = (effFilter.blur?.resolvePx() ?: 0f).coerceIn(0f, 48f)
-        val dsScale = when {
-            blurPx >= 16f && width >= 96 && height >= 96 -> 4
-            blurPx >= 6f && width >= 48 && height >= 48 -> 2
-            else -> 1
-        }
-        val bmpW = max(1, (width + dsScale - 1) / dsScale)
-        val bmpH = max(1, (height + dsScale - 1) / dsScale)
+        val dsScale = plan.downsampleScale
+        val bmpW = plan.captureWidth
+        val bmpH = plan.captureHeight
 
         var bmp = cachedBackdropBitmap
         if (bmp == null || bmp.width != bmpW || bmp.height != bmpH || bmp.isRecycled) {
@@ -254,13 +251,8 @@ class AndroidHardwareBackdropBlurController(
             capCanvas.restore()
         }
 
-        val scaledFilter = if (dsScale > 1 && blurPx > 0f) {
-            effFilter.copy(blur = CssLength.px((blurPx / dsScale.toFloat()).coerceAtLeast(1f)))
-        } else {
-            effFilter
-        }
         bmp.getPixels(pixels, 0, bmpW, 0, 0, bmpW, bmpH)
-        scaledFilter.applyBackdropToArgbRegion(
+        plan.scaledFilter.applyBackdropToArgbRegion(
             argbPixels = pixels,
             bufferWidth = bmpW,
             bufferHeight = bmpH,
@@ -512,106 +504,6 @@ class AndroidHardwareBackdropBlurController(
         if (hostView.isAttachedToWindow && hasActiveBackdrop()) {
             hostView.postInvalidateOnAnimation()
         }
-    }
-
-    private fun buildColorMatrix(filter: CssFilter): ColorMatrix? {
-        if (!filter.hasPixelOps) return null
-        val cm = ColorMatrix()
-        val gs = filter.grayscale
-        if (gs != null && gs != 0f) {
-            val sat = ColorMatrix()
-            sat.setSaturation(1f - gs.coerceIn(0f, 1f))
-            cm.postConcat(sat)
-        }
-        val sp = filter.sepia
-        if (sp != null && sp != 0f) {
-            val s = sp.coerceIn(0f, 1f)
-            val inv = 1f - s
-            cm.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        inv + 0.393f * s, 0.769f * s, 0.189f * s, 0f, 0f,
-                        0.349f * s, inv + 0.686f * s, 0.168f * s, 0f, 0f,
-                        0.272f * s, 0.534f * s, inv + 0.131f * s, 0f, 0f,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-        }
-        val satVal = filter.saturate
-        if (satVal != null && satVal != 1f) {
-            val sat = ColorMatrix()
-            sat.setSaturation(satVal.coerceAtLeast(0f))
-            cm.postConcat(sat)
-        }
-        val hueDeg = filter.hueRotateDeg
-        if (hueDeg != null && hueDeg != 0f) {
-            val rad = hueDeg * (PI.toFloat() / 180f)
-            val c = cos(rad)
-            val s = sin(rad)
-            cm.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        0.213f + c * 0.787f - s * 0.213f, 0.715f - c * 0.715f - s * 0.715f, 0.072f - c * 0.072f + s * 0.928f, 0f, 0f,
-                        0.213f - c * 0.213f + s * 0.143f, 0.715f + c * 0.285f + s * 0.140f, 0.072f - c * 0.072f - s * 0.283f, 0f, 0f,
-                        0.213f - c * 0.213f - s * 0.787f, 0.715f - c * 0.715f + s * 0.715f, 0.072f + c * 0.928f + s * 0.072f, 0f, 0f,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-        }
-        val brVal = filter.brightness
-        val invVal = filter.invert
-        val brBeforeInv = brVal == 0f && invVal != null && invVal != 0f
-        if (brBeforeInv) {
-            val br = brVal.coerceAtLeast(0f)
-            val m = ColorMatrix()
-            m.setScale(br, br, br, 1f)
-            cm.postConcat(m)
-        }
-        if (invVal != null && invVal != 0f) {
-            val iv = invVal.coerceIn(0f, 1f)
-            val scale = 1f - 2f * iv
-            val offset = 255f * iv
-            cm.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        scale, 0f, 0f, 0f, offset,
-                        0f, scale, 0f, 0f, offset,
-                        0f, 0f, scale, 0f, offset,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-        }
-        if (!brBeforeInv && brVal != null && brVal != 1f) {
-            val br = brVal.coerceAtLeast(0f)
-            val m = ColorMatrix()
-            m.setScale(br, br, br, 1f)
-            cm.postConcat(m)
-        }
-        val ctVal = filter.contrast
-        if (ctVal != null && ctVal != 1f) {
-            val ct = ctVal.coerceAtLeast(0f)
-            val off = 127.5f * (1f - ct)
-            cm.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        ct, 0f, 0f, 0f, off,
-                        0f, ct, 0f, 0f, off,
-                        0f, 0f, ct, 0f, off,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-        }
-        val opVal = filter.opacity
-        if (opVal != null && opVal != 1f) {
-            val m = ColorMatrix()
-            m.setScale(1f, 1f, 1f, opVal.coerceIn(0f, 1f))
-            cm.postConcat(m)
-        }
-        return cm
     }
 
     private class SurfaceUpdateRelayListener(

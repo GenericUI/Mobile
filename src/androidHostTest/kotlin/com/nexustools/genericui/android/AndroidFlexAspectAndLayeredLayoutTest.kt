@@ -15,6 +15,14 @@ import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.component.shell.Window
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.enums.bootstrap.BootstrapAspectRatio
+import com.nexustools.genericui.enums.bootstrap.BootstrapPointerEvents
+import com.nexustools.genericui.geometry.Size
+import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
+import com.nexustools.genericui.style.css.ComponentStyle
+import com.nexustools.genericui.style.css.CssEdgeLengths
+import com.nexustools.genericui.style.css.CssLength
+import com.nexustools.genericui.style.transition.CssTransform2D
+import com.nexustools.genericui.enums.css.CssPosition
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -229,6 +237,123 @@ class AndroidFlexAspectAndLayeredLayoutTest {
         assertEquals(1, hudButtonClicks)
 
         window.dispose()
+        activityController.pause().stop().destroy()
+    }
+
+    @Test
+    fun proximalRelativeAndWindowAbsoluteSignedTransformZIndexAndPointerEventsPassThroughInFlexContainers() {
+        val factory = AndroidNativeFactory(context)
+        GenericUI.initialize(factory)
+
+        val relRoot = AndroidContainerImpl().apply {
+            applyComponentStyle(ComponentStyle().apply {
+                setPosition(CssPosition.RELATIVE)
+                setWidth(CssLength.px(400f))
+                setHeight(CssLength.px(300f))
+            })
+        }
+        val staticMiddle = AndroidContainerImpl().apply {
+            applyComponentStyle(ComponentStyle().apply {
+                setMargin(CssEdgeLengths(top = CssLength.px(50f), left = CssLength.px(20f), right = CssLength.px(0f), bottom = CssLength.px(0f)))
+                setWidth(CssLength.px(300f))
+                setHeight(CssLength.px(200f))
+            })
+        }
+
+        var lowerClicks = 0
+        val lowerBtn = AndroidStyledButtonImpl().apply {
+            setOnClick { lowerClicks++ }
+            applyComponentStyle(ComponentStyle().apply {
+                setPosition(CssPosition.ABSOLUTE)
+                setTop(CssLength.px(20f))
+                setRight(CssLength.px(10f))
+                setZIndex(5)
+                setWidth(CssLength.px(80f))
+                setHeight(CssLength.px(30f))
+            })
+        }
+
+        val upperPassThroughSc = AndroidStyledComponentImpl().apply {
+            applyComponentStyle(ComponentStyle().apply {
+                setPosition(CssPosition.ABSOLUTE)
+                setTop(CssLength.px(20f))
+                setRight(CssLength.px(10f))
+                setZIndex(25)
+                setWidth(CssLength.px(80f))
+                setHeight(CssLength.px(30f))
+                setTransform(CssTransform2D(translateX = -10f, translateY = -5f, scaleX = 1.25f))
+            })
+            applyComponentBootstrap(ComponentBootstrap().apply { setPointerEvents(BootstrapPointerEvents.NONE) })
+        }
+
+        staticMiddle.addChildNative(lowerBtn, -1)
+        staticMiddle.addChildNative(upperPassThroughSc, -1)
+        relRoot.addChildNative(staticMiddle, -1)
+
+        val relView = relRoot.ensureAndroidView(context) as AndroidFlexContainerView
+        val midView = staticMiddle.ensureAndroidView(context) as AndroidFlexContainerView
+        val lowerView = lowerBtn.ensureAndroidView(context)!!
+        val upperView = upperPassThroughSc.ensureAndroidView(context)!!
+        shadowOf(context.mainLooper).idle()
+
+        val activityController = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = activityController.get()
+        val hostFrame = FrameLayout(activity)
+        hostFrame.addView(relView, FrameLayout.LayoutParams(400, 300))
+        activity.setContentView(hostFrame)
+        shadowOf(activity.mainLooper).idle()
+
+        relView.measure(MeasureSpec.makeMeasureSpec(400, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(300, MeasureSpec.EXACTLY))
+        relView.layout(0, 0, 400, 300)
+
+        // staticMiddle at (20, 50); right=10 top=20 inside relRoot (400x300) => xInRel=310, yInRel=20 => local=(290, -30)
+        assertEquals(290, upperView.left)
+        assertEquals(-30, upperView.top)
+        assertEquals(80, upperView.width)
+        assertEquals(30, upperView.height)
+        assertEquals(-10f, upperView.translationX)
+        assertEquals(-5f, upperView.translationY)
+        assertEquals(1.25f, upperView.scaleX)
+        assertEquals(25f, upperView.translationZ)
+        assertEquals(5f, lowerView.translationZ)
+
+        // Touch in staticMiddle coordinates hitting lowerBtn (290+10, -30+10) passes through upperPassThroughSc?
+        // Note: upperView is above lowerView in midView (z=25 > z=5), so pointer-events: none returns false and lets lowerView catch!
+        val t = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, 295f, -20f, 0)
+        val up = MotionEvent.obtain(t, t + 15, MotionEvent.ACTION_UP, 295f, -20f, 0)
+        // Dispatch directly to midView? Note: Android standard ViewGroup checks child bounds! Notice lowerView is also at (290, -30)..(370, 0)!
+        assertTrue(midView.dispatchTouchEvent(down))
+        assertTrue(midView.dispatchTouchEvent(up))
+        shadowOf(activity.mainLooper).idle()
+        down.recycle()
+        up.recycle()
+        assertEquals(1, lowerClicks, "pointer-events: none upper StyledComponent must pass clicks through to underlying lower-z Button")
+
+        // Direct Window position: absolute + translateX(-50%)
+        val win = AndroidWindowImpl()
+        win.setWindowSize(Size(800, 600))
+        val winAbs = AndroidStyledComponentImpl().apply {
+            applyComponentStyle(ComponentStyle().apply {
+                setPosition(CssPosition.ABSOLUTE)
+                setTop(CssLength.px(20f))
+                setLeft(CssLength.percent(50f))
+                setWidth(CssLength.px(100f))
+                setHeight(CssLength.px(40f))
+                setTransform(CssTransform2D(translateX = -50f, translateXIsPercent = true))
+            })
+        }
+        win.addChildNative(winAbs, -1)
+        val winView = win.ensureAndroidView(context) as AndroidFlexContainerView
+        val winAbsView = winAbs.ensureAndroidView(context)!!
+        shadowOf(context.mainLooper).idle()
+        winView.measure(MeasureSpec.makeMeasureSpec(800, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(600, MeasureSpec.EXACTLY))
+        winView.layout(0, 0, 800, 600)
+        assertEquals(400, winAbsView.left)
+        assertEquals(20, winAbsView.top)
+        assertEquals(-50f, winAbsView.translationX)
+
+        win.dispose()
         activityController.pause().stop().destroy()
     }
 }

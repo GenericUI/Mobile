@@ -16,16 +16,10 @@ import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UIFont
 import platform.UIKit.UILabel
 import platform.UIKit.UITextField
-import platform.UIKit.labelColor
-import platform.UIKit.secondarySystemBackgroundColor
-import platform.UIKit.systemBlueColor
-import platform.UIKit.systemGreenColor
-import platform.UIKit.systemOrangeColor
-import platform.UIKit.systemRedColor
 
 /**
- * Native UIKit tab button chip implementation of [TabNativeImpl], hosting a title/icon `UIButton`,
- * badge `UILabel`, dirty indicator, inline rename `UITextField`, and optional close `UIButton`.
+ * Native UIKit tab metadata and fallback header holder for [TabNativeImpl], consumed by
+ * [IosTabContainerImpl]'s `UISegmentedControl` without applying custom Bootstrap chip styling.
  */
 class IosTabImpl(
     val closable: Boolean = false
@@ -43,6 +37,7 @@ class IosTabImpl(
     val selectButton: UIButton = UIButton.buttonWithType(UIButtonTypeSystem).apply {
         setFrame(CGRectMake(0.0, 0.0, 84.0, 34.0))
     }
+    private val defaultSelectTintColor = selectButton.tintColor
     private val closeButton: UIButton = UIButton.buttonWithType(UIButtonTypeSystem).apply {
         setFrame(CGRectMake(0.0, 0.0, 22.0, 22.0))
         setTitle("×", forState = UIControlStateNormal)
@@ -68,10 +63,19 @@ class IosTabImpl(
     private var pinnedState: Boolean = false
     private var editableState: Boolean = false
     private var selectedState: Boolean = false
+    private var badgeTextVal: String? = null
     private var customHeaderImpl: NativeImpl<*>? = null
     private var onCloseListener: (() -> Unit)? = null
     private var onTitleEditedListener: ((String) -> Unit)? = null
     var onSelectTabRequested: (() -> Unit)? = null
+    internal var onTabUpdated: (() -> Unit)? = null
+
+    internal fun currentTitle(): String = tabTitle
+    internal fun currentIcon(): String? = tabIcon
+    internal fun isDirty(): Boolean = dirtyState
+    internal fun isPinned(): Boolean = pinnedState
+    internal fun isClosable(): Boolean = closableState
+    internal fun currentBadgeText(): String? = badgeTextVal
 
     init {
         val host = uiView as UikitFlexContainerView
@@ -114,23 +118,25 @@ class IosTabImpl(
     override fun setTitleNative(title: String) {
         tabTitle = title
         refreshTabHeader()
+        onTabUpdated?.invoke()
     }
 
     override fun setIconNative(icon: String?) {
         tabIcon = icon
         selectButton.setImage(UikitGeometryAndColorUtil.systemIconImage(icon), forState = UIControlStateNormal)
+        onTabUpdated?.invoke()
     }
 
     override fun setIconSizePxNative(sizePx: Int) {
-        // Icon sizing tracked alongside button layout
+        // Icon sizing tracked alongside segment layout
     }
 
     override fun setIconPlacementNative(placement: TabIconPlacement) {
-        // Icon placement tracked for button configuration
+        // Icon placement tracked for segment configuration
     }
 
     override fun setTintImageToThemeNative(tintToTheme: Boolean) {
-        selectButton.tintColor = if (tintToTheme) UIColor.labelColor else UIColor.systemBlueColor
+        selectButton.tintColor = defaultSelectTintColor
     }
 
     override fun setTooltipNative(tooltip: String?) {
@@ -140,16 +146,19 @@ class IosTabImpl(
     override fun setClosableNative(closable: Boolean) {
         closableState = closable
         refreshTabHeader()
+        onTabUpdated?.invoke()
     }
 
     override fun setDirtyNative(dirty: Boolean) {
         dirtyState = dirty
         refreshTabHeader()
+        onTabUpdated?.invoke()
     }
 
     override fun setPinnedNative(pinned: Boolean) {
         pinnedState = pinned
         refreshTabHeader()
+        onTabUpdated?.invoke()
     }
 
     override fun setEditableNative(editable: Boolean) {
@@ -158,17 +167,10 @@ class IosTabImpl(
 
     override fun setBadgeNative(badgeText: String?, variantCss: String?) {
         val clean = badgeText?.takeIf { it.isNotEmpty() }
+        badgeTextVal = clean
         badgeLabel.hidden = clean == null
         badgeLabel.text = clean
-        if (clean != null) {
-            badgeLabel.backgroundColor = when (variantCss?.lowercase()) {
-                "danger", "bg-danger" -> UIColor.systemRedColor
-                "success", "bg-success" -> UIColor.systemGreenColor
-                "warning", "bg-warning" -> UIColor.systemOrangeColor
-                else -> UIColor.systemBlueColor
-            }
-            badgeLabel.textColor = UIColor.whiteColor
-        }
+        onTabUpdated?.invoke()
     }
 
     override fun setSelectedNative(selected: Boolean) {
@@ -195,6 +197,7 @@ class IosTabImpl(
     }
 
     private fun beginInlineEdit() {
+        if (!isFocusable()) return
         inlineEditor.text = tabTitle
         inlineEditor.hidden = false
         selectButton.hidden = true
@@ -209,6 +212,7 @@ class IosTabImpl(
             tabTitle = trimmed
             refreshTabHeader()
             onTitleEditedListener?.invoke(trimmed)
+            onTabUpdated?.invoke()
         }
     }
 
@@ -216,7 +220,7 @@ class IosTabImpl(
         val display = if (dirtyState) "$tabTitle •" else tabTitle
         selectButton.setTitle(display, forState = UIControlStateNormal)
         closeButton.hidden = !closableState || pinnedState
-        uiView.backgroundColor = if (selectedState) UIColor.secondarySystemBackgroundColor else UIColor.clearColor
+        uiView.backgroundColor = UIColor.clearColor
         uiView.setNeedsLayout()
     }
 }

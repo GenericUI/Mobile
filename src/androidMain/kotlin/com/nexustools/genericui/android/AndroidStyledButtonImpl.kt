@@ -158,6 +158,9 @@ class AndroidStyledButtonImpl(
                         }
                     }
                 }
+                if (!isFocusable()) {
+                    applyFocusableStateToView(tv, false)
+                }
 
                 tv.backgroundTintList = null
                 val gradDrawable = AndroidStyledContainerImpl.buildGradientDrawable(current)
@@ -273,13 +276,13 @@ class AndroidStyledButtonImpl(
     override fun isHoveredState(): Boolean = if (!isEnabled()) false else hovered
 
     override fun setFocusedState(focused: Boolean) {
-        val coerced = if (!isEnabled()) false else focused
+        val coerced = if (!isEnabled() || !isFocusable()) false else focused
         this.focused = coerced
         nativeWidget.attributes["focused"] = coerced.toString()
         syncCurrentVisuals()
     }
 
-    override fun isFocusedState(): Boolean = if (!isEnabled()) false else focused
+    override fun isFocusedState(): Boolean = if (!isEnabled() || !isFocusable()) false else focused
 
     override fun setActivePressedState(active: Boolean) {
         val coerced = if (!isEnabled()) false else active

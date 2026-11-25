@@ -74,6 +74,7 @@ class AndroidWindowImpl : AndroidBaseContainerNativeImpl("android.view.Window", 
 
     init {
         nativeWidget.attributes["always-on-top"] = "false"
+        nativeWidget.isWindowRootHost = true
     }
 
     private var titleBarInstructions: TitleBar? = null

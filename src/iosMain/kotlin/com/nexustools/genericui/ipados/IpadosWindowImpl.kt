@@ -200,7 +200,11 @@ class IpadosWindowImpl(
         attachedWindowScene?.let { applySizeRestrictionsToScene(it) }
         UikitEnvironment.registeredKeyWindow = uiWindow
         UikitEnvironment.registeredRootViewController = rootViewController
-        uiWindow?.makeKeyAndVisible()
+        if (UikitEnvironment.hasHostedUiApplication()) {
+            uiWindow?.makeKeyAndVisible()
+        } else {
+            uiWindow?.hidden = false
+        }
         layoutWindowRegions()
     }
 

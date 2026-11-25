@@ -1,14 +1,23 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import com.nexustools.genericui.component.action.Button
 import com.nexustools.genericui.component.layout.HStack
 import com.nexustools.genericui.component.layout.VStack
 import com.nexustools.genericui.component.lazy.LazyList
 import com.nexustools.genericui.component.shell.Application
 import com.nexustools.genericui.component.shell.Window
+import com.nexustools.genericui.component.tabs.TabPosition
 import com.nexustools.genericui.core.GenericUI
+import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
+import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.SpacingScale
+import com.nexustools.genericui.style.color.RgbaColor
+import com.nexustools.genericui.style.theme.ThemeColorSet
+import com.nexustools.genericui.style.theme.ThemeConfig
 import com.nexustools.genericui.threading.GenericUiThreading
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -47,6 +56,7 @@ class AndroidCoreFixesTest {
     fun tearDown() {
         Application.current?.dispose()
         GenericUI.activeFactory = null
+        GenericUI.defaultThemeConfig = ThemeConfig.DEFAULT
         AndroidViewHandle.activeContext = null
         AndroidPreferenceStoreImpl.applicationContext = null
     }
@@ -217,5 +227,137 @@ class AndroidCoreFixesTest {
         assertFalse(headlessUdp.isMulticastLockHeld())
         assertTrue(headlessUdp.leaveMulticastGroup("239.255.255.250", null))
         headlessUdp.dispose()
+    }
+
+    @Test
+    fun genuineMaterialTabLayoutAndUntintedNativeProgressBarInRobolectric() {
+        val pb = AndroidProgressBarImpl()
+        pb.setProgress(0.5f)
+        pb.setType(BootstrapType.DANGER)
+        val nativePb = pb.nativeWidget.androidView as android.widget.ProgressBar
+        assertEquals(500, nativePb.progress)
+        assertNull(nativePb.progressTintList, "Native Android ProgressBar must leave progressTintList null")
+        assertNull(nativePb.indeterminateTintList, "Native Android ProgressBar must leave indeterminateTintList null")
+        assertNull(nativePb.backgroundTintList)
+
+        val sp = AndroidSpinnerImpl()
+        sp.setType(BootstrapType.PRIMARY)
+        val nativeSp = sp.nativeWidget.androidView as android.widget.ProgressBar
+        assertNull(nativeSp.indeterminateTintList)
+
+        val tc = AndroidTabContainerImpl()
+        tc.setType(BootstrapType.DANGER)
+        val matTabLayout = tc.tabLayout
+        assertNotNull(matTabLayout, "AndroidTabContainerImpl must use genuine Material TabLayout")
+        assertNull(tc.nativeWidget.androidView?.backgroundTintList)
+
+        val tab0 = AndroidTabImpl().apply { setTitleNative("Overview") }
+        val tab1 = AndroidTabImpl().apply { setTitleNative("Settings") }
+        val c0 = AndroidContainerImpl()
+        val c1 = AndroidContainerImpl()
+        var selectedCallbackIdx = -1
+        tc.setOnTabSelected { idx -> selectedCallbackIdx = idx }
+        tc.addTabNative(tab0, c0, -1)
+        tc.addTabNative(tab1, c1, -1)
+        assertEquals(2, matTabLayout.tabCount)
+        assertEquals("Overview", matTabLayout.getTabAt(0)?.text?.toString())
+        assertEquals("Settings", matTabLayout.getTabAt(1)?.text?.toString())
+
+        matTabLayout.getTabAt(1)?.select()
+        assertEquals(1, tc.getSelectedTabIndex())
+        assertEquals(1, selectedCallbackIdx)
+
+        tc.setTabPositionNative(TabPosition.BOTTOM)
+        val root = tc.nativeWidget.androidView as android.widget.LinearLayout
+        assertEquals(matTabLayout, root.getChildAt(root.childCount - 1))
+
+        val dropdown = AndroidDropdownImpl()
+        dropdown.setLabel("Filter")
+        dropdown.setType(BootstrapType.NONE)
+        shadowOf(context.mainLooper).idle()
+        val dropdownView = dropdown.nativeWidget.androidView as? androidx.appcompat.widget.AppCompatButton
+        assertNotNull(dropdownView)
+        assertNull(dropdownView.backgroundTintList)
+        dropdown.setType(BootstrapType.PRIMARY)
+        shadowOf(context.mainLooper).idle()
+        assertEquals("true", dropdown.nativeWidget.attributes["useSystemControlAppearance"])
+        assertNull(dropdown.nativeWidget.attributes["nativeButtonTinted"])
+        assertNull(dropdown.nativeWidget.attributes["offscreenSpriteTinted"])
+        assertNull(dropdown.nativeWidget.attributes["bootstrapTintColor"])
+        assertNull(dropdownView.backgroundTintList)
+    }
+
+    @Test
+    fun nativeAndroidButtonUsesBackgroundTintListAndRippleGradientDrawablesInRobolectric() {
+        val customPrimary = RgbaColor(200, 40, 90, 255)
+        val app = AndroidApplicationImpl()
+        try {
+            app.setThemeConfig(
+                ThemeConfig(
+                    lightColors = ThemeColorSet(primary = customPrimary),
+                    darkColors = ThemeColorSet(primary = customPrimary)
+                )
+            )
+            val btn = AndroidButtonImpl()
+            btn.setText("Confirm")
+            btn.setType(BootstrapType.NONE)
+            shadowOf(context.mainLooper).idle()
+
+            val btnView = assertNotNull(btn.nativeWidget.androidView as? androidx.appcompat.widget.AppCompatButton)
+            val defaultBg = btnView.background
+            assertNull(btnView.backgroundTintList)
+            assertEquals("true", btn.nativeWidget.attributes["useSystemControlAppearance"])
+            assertNull(btn.nativeWidget.attributes["nativeButtonTinted"])
+
+            // Standard filled semantic button uses native backgroundTintList
+            btn.setType(BootstrapType.PRIMARY)
+            shadowOf(context.mainLooper).idle()
+            assertEquals("false", btn.nativeWidget.attributes["useSystemControlAppearance"])
+            assertEquals("true", btn.nativeWidget.attributes["nativeButtonTinted"])
+            assertEquals(customPrimary.toArgbInt(), assertNotNull(btnView.backgroundTintList).defaultColor)
+
+            // Outlined pill button uses RippleDrawable wrapping GradientDrawable with transparent fill & rounded corners
+            btn.setOutline(true)
+            btn.setBorderRadius(BorderRadiusStyle.PILL)
+            shadowOf(context.mainLooper).idle()
+            assertNull(btnView.backgroundTintList)
+            val outlineRipple = assertNotNull(btnView.background as? RippleDrawable)
+            val outlineShape = assertNotNull(outlineRipple.getDrawable(0) as? GradientDrawable)
+            assertEquals(Color.TRANSPARENT, outlineShape.color?.defaultColor)
+            assertTrue(outlineShape.cornerRadius > 0f)
+            assertEquals(customPrimary.toArgbInt(), btnView.currentTextColor)
+
+            // Filled pill button uses RippleDrawable wrapping filled rounded GradientDrawable
+            btn.setOutline(false)
+            shadowOf(context.mainLooper).idle()
+            assertNull(btnView.backgroundTintList)
+            val filledRipple = assertNotNull(btnView.background as? RippleDrawable)
+            val filledShape = assertNotNull(filledRipple.getDrawable(0) as? GradientDrawable)
+            assertEquals(customPrimary.toArgbInt(), filledShape.color?.defaultColor)
+            assertTrue(filledShape.cornerRadius > 0f)
+
+            // Link button uses transparent GradientDrawable inside RippleDrawable with primary text color
+            btn.setType(BootstrapType.LINK)
+            btn.setBorderRadius(null)
+            shadowOf(context.mainLooper).idle()
+            assertNull(btnView.backgroundTintList)
+            val linkRipple = assertNotNull(btnView.background as? RippleDrawable)
+            val linkShape = assertNotNull(linkRipple.getDrawable(0) as? GradientDrawable)
+            assertEquals(Color.TRANSPARENT, linkShape.color?.defaultColor)
+            assertEquals(customPrimary.toArgbInt(), btnView.currentTextColor)
+
+            // Reverting to NONE restores system control background and clears backgroundTintList
+            btn.setType(BootstrapType.NONE)
+            shadowOf(context.mainLooper).idle()
+            assertNull(btnView.backgroundTintList)
+            assertEquals("true", btn.nativeWidget.attributes["useSystemControlAppearance"])
+            assertNull(btn.nativeWidget.attributes["nativeButtonTinted"])
+            assertTrue(btnView.background !== linkRipple)
+            if (defaultBg != null) {
+                assertNotNull(btnView.background)
+            }
+        } finally {
+            app.dispose()
+        }
     }
 }

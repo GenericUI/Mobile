@@ -3,21 +3,17 @@
 package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.enums.bootstrap.AlignItems
-import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIButton
 import platform.UIKit.UIButtonTypeSystem
-import platform.UIKit.UIColor
 import platform.UIKit.UIControlEventTouchUpInside
 import platform.UIKit.UIControlEventValueChanged
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UIImage
 import platform.UIKit.UILabel
 import platform.UIKit.UISwitch
-import platform.UIKit.systemBlueColor
 
 /**
  * Native UIKit checkbox / switch / radio implementation of [CheckboxNativeImpl] wrapping a
@@ -39,6 +35,7 @@ class IosCheckboxImpl(
 
     private val switchControl: UISwitch? = if (switchStyle) UISwitch(frame = CGRectMake(0.0, 0.0, 51.0, 31.0)) else null
     private val toggleButton: UIButton? = if (!switchStyle) UIButton.buttonWithType(UIButtonTypeSystem) else null
+    private val defaultToggleTintColor = toggleButton?.tintColor
     private val titleLabel: UILabel = UILabel(frame = CGRectMake(0.0, 0.0, 140.0, 24.0))
 
     private var labelText: String = ""
@@ -103,11 +100,8 @@ class IosCheckboxImpl(
     }
 
     override fun onBootstrapAppearanceChanged() {
-        val color = UikitGeometryAndColorUtil.resolveBootstrapColor(getType() ?: BootstrapType.NONE)?.toUiColor()
-        switchControl?.onTintColor = color
-        toggleButton?.let { btn ->
-            btn.tintColor = color ?: UIColor.systemBlueColor
-        }
+        switchControl?.onTintColor = null
+        defaultToggleTintColor?.let { toggleButton?.tintColor = it }
     }
 
     private fun refreshVisualState() {

@@ -6,6 +6,7 @@ import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.AlignSelf
 import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
+import com.nexustools.genericui.enums.bootstrap.BootstrapPointerEvents
 import com.nexustools.genericui.enums.bootstrap.BootstrapSize
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.DisplayMode
@@ -20,6 +21,10 @@ import com.nexustools.genericui.enums.bootstrap.SpacingScale
 import com.nexustools.genericui.enums.bootstrap.TextAlignment
 import com.nexustools.genericui.enums.bootstrap.TextOverflow
 import com.nexustools.genericui.enums.bootstrap.TextTransform
+import com.nexustools.genericui.enums.css.CssPointerEvents
+import com.nexustools.genericui.enums.css.CssPosition
+import com.nexustools.genericui.enums.css.CssVisibility
+import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.event.KeyEvent
 import com.nexustools.genericui.event.PointerEvent
 import com.nexustools.genericui.event.WheelEvent
@@ -28,34 +33,55 @@ import com.nexustools.genericui.geometry.Rect
 import com.nexustools.genericui.geometry.Size
 import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toCgColor
 import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
-import com.nexustools.genericui.enums.css.CssVisibility
 import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
+import com.nexustools.genericui.style.color.BootstrapColorPalette
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.color.RgbaColor
 import com.nexustools.genericui.style.css.CssCursorValue
+import com.nexustools.genericui.style.css.CssLength
+import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.Gradient
+import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
+import com.nexustools.genericui.style.policy.AestheticStylePolicy
+import com.nexustools.genericui.style.theme.SystemThemeDetector
+import com.nexustools.genericui.style.transition.CssTimingFunction
+import com.nexustools.genericui.style.transition.CssTransform2D
 import com.nexustools.genericui.style.transition.CssTransitionSpec
+import com.nexustools.genericui.threading.GenericUiThreading
+import kotlinx.cinterop.CValue
 import kotlinx.cinterop.useContents
+import platform.CoreGraphics.CGAffineTransform
 import platform.CoreGraphics.CGAffineTransformMakeScale
+import platform.CoreGraphics.CGAffineTransformMakeTranslation
+import platform.CoreGraphics.CGAffineTransformRotate
+import platform.CoreGraphics.CGAffineTransformScale
+import platform.CoreGraphics.CGPointMake
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
+import platform.Foundation.NSThread
 import platform.Foundation.setValue
 import platform.UIKit.UIControl
+import platform.UIKit.UICubicTimingParameters
 import platform.UIKit.UIHoverGestureRecognizer
 import platform.UIKit.UILongPressGestureRecognizer
 import platform.UIKit.UIPointerInteraction
 import platform.UIKit.UITapGestureRecognizer
 import platform.UIKit.UIView
-import platform.UIKit.UIViewAnimationOptionCurveEaseInOut
-import platform.UIKit.UIViewAnimationOptionCurveEaseOut
-import platform.UIKit.UIViewAnimationOptionCurveLinear
+import platform.UIKit.UIViewAnimationCurve
+import platform.UIKit.UIViewPropertyAnimator
 import platform.UIKit.accessibilityLabel
 import platform.UIKit.addInteraction
+import platform.UIKit.endEditing
 import platform.objc.sel_registerName
 import platform.darwin.dispatch_after
+import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 import platform.darwin.dispatch_time
 import platform.darwin.NSEC_PER_MSEC
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Base real UIKit [NativeImpl] wrapping a genuine `platform.UIKit.UIView` inside [UikitViewHandle].
@@ -66,8 +92,11 @@ import platform.darwin.NSEC_PER_MSEC
  */
 open class IosBaseNativeImpl(
     override val nativeWidget: UikitViewHandle,
-    override val componentClassPrefix: String
+    override val componentClassPrefix: String,
+    initialTagName: String = ""
 ) : NativeImpl<UikitViewHandle> {
+
+    val componentTagName: String = initialTagName
 
     protected val actionTarget: UikitControlActionTarget = UikitControlActionTarget(nativeWidget.uiView)
     private var pointerDelegate: UikitPointerInteractionDelegate? = null
@@ -78,7 +107,96 @@ open class IosBaseNativeImpl(
     private var hoverRecognizer: UIHoverGestureRecognizer? = null
 
     protected open val allowsTypographyStyleOverrides: Boolean get() = false
-    protected open val allowsAestheticStyleSkinning: Boolean get() = false
+    protected open val allowsAestheticStyleSkinning: Boolean
+        get() = AestheticStylePolicy.isExplicitlyStyledTagOrPrefix(componentTagName, componentClassPrefix) ||
+            isInCustomStyleEngineSubtree()
+
+    internal fun isInCustomStyleEngineSubtree(): Boolean {
+        if (attributesMap["data-style-engine"] == "custom") return true
+        var cur: UIView? = nativeWidget.uiView.superview
+        while (cur != null) {
+            if (UikitViewLayoutRegistry.get(cur).customStyleEngine) return true
+            cur = cur.superview
+        }
+        return false
+    }
+
+    protected open fun allowsBootstrapNonControlColor(): Boolean =
+        AestheticStylePolicy.isBootstrapSpecificNonControlTagOrPrefix(componentTagName, componentClassPrefix)
+
+    protected open fun allowsBootstrapColorForStyledSpec(): Boolean =
+        this is IosStyledButtonImpl || allowsBootstrapNonControlColor() || isInCustomStyleEngineSubtree()
+
+    internal fun activeAnimatedOpacityOrNull(): Float? = activeOpacityTransitionTarget
+
+    internal fun rawBootstrapStyleSnapshot(): BootstrapStyleSnapshot = BootstrapStyleSnapshot(
+        componentPrefix = componentClassPrefix,
+        type = bootstrapType,
+        outline = outlineMode,
+        backgroundType = bgType,
+        textColorType = textType,
+        borderType = borderType
+    )
+
+    internal fun snapshotForStyledVisuals(): BootstrapStyleSnapshot =
+        if (allowsBootstrapColorForStyledSpec()) {
+            BootstrapStyleSnapshot(
+                componentPrefix = componentClassPrefix,
+                type = bootstrapType,
+                outline = outlineMode,
+                backgroundType = bgType,
+                textColorType = textType,
+                borderType = borderType
+            )
+        } else {
+            BootstrapStyleSnapshot(componentPrefix = componentClassPrefix)
+        }
+
+    internal fun sanitizeIncomingStyledVisuals(spec: StyledVisualSpec): StyledVisualSpec {
+        if (allowsBootstrapColorForStyledSpec()) return spec
+        val semType = bootstrapType?.takeIf { it.isSemantic }
+            ?: bgType?.takeIf { it.isSemantic }
+        val txType = textType?.takeIf { it.isSemantic }
+        val brType = borderType?.takeIf { it.isSemantic }
+        if (semType == null && txType == null && brType == null) return spec
+
+        val isDark = UikitGeometryAndColorUtil.isDarkActive()
+        val explicitBg = rawLayoutComponentStyle?.getBackgroundColor() ?: rawLayoutComputedStyle?.backgroundColor
+        val explicitFg = rawLayoutComponentStyle?.getTextColor() ?: rawLayoutComputedStyle?.textColor
+        val explicitBorder = rawLayoutComponentStyle?.getBorderColor() ?: rawLayoutComputedStyle?.borderColor
+
+        var sanitized = spec
+        if (explicitBg == null && semType != null && !outlineMode) {
+            val bsBg = BootstrapColorPalette.resolveColor(semType, isDark)
+            if (sanitized.backgroundColor == bsBg) {
+                sanitized = sanitized.copy(backgroundColor = null)
+            }
+        }
+        if (explicitFg == null && (semType != null || txType != null)) {
+            val bsFg = txType?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+                ?: semType?.let {
+                    if (outlineMode) BootstrapColorPalette.resolveColor(it, isDark)
+                    else BootstrapColorPalette.resolveForegroundOn(it)
+                }
+            if (bsFg != null && sanitized.textColor == bsFg) {
+                sanitized = sanitized.copy(textColor = null)
+            }
+        }
+        if (explicitBorder == null && (brType != null || (semType != null && outlineMode))) {
+            val bsBorder = (brType ?: semType)?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+            if (bsBorder != null && sanitized.borderColor == bsBorder) {
+                val clearWidth = rawLayoutComponentStyle?.borderWidthPx == null &&
+                    rawLayoutComputedStyle?.borderWidthPx == null &&
+                    sanitized.borderWidthPx == 1f
+                sanitized = sanitized.copy(
+                    borderColor = null,
+                    borderWidthPx = if (clearWidth) null else sanitized.borderWidthPx,
+                    borderStyle = if (clearWidth) null else sanitized.borderStyle
+                )
+            }
+        }
+        return sanitized
+    }
 
     override var isDisposed: Boolean = false
 
@@ -113,8 +231,19 @@ open class IosBaseNativeImpl(
     private var hovered: Boolean = false
     private var focused: Boolean = false
     private var activePressed: Boolean = false
+    private var enabledState: Boolean = true
+    private var focusableState: Boolean = true
+    private var pointerEventsNoneState: Boolean = false
+    private val attributesMap = linkedMapOf<String, String>()
+    protected var rawLayoutComponentStyle: ComponentStyle? = null
+    protected var rawLayoutComputedStyle: ComputedStyle? = null
     private var customCursor: CssCursorValue? = null
     private var configuredTransitions: List<CssTransitionSpec> = emptyList()
+    private val activeAnimators = linkedMapOf<String, UIViewPropertyAnimator>()
+    private val activeAnimatorCompletions = linkedMapOf<String, () -> Unit>()
+    private var activeOpacityTransitionTarget: Float? = null
+    private var activeOpacityTransitionFrom: Float? = null
+    private var activeBackgroundColorTransitionTarget: RgbaColor? = null
 
     var onKeyDownListener: ((KeyEvent) -> Unit)? = null
         protected set
@@ -140,6 +269,8 @@ open class IosBaseNativeImpl(
                 classTokens += token
             }
         }
+        syncUserInteractionEnabled()
+        syncLayoutMetadataToUikit()
     }
 
     override fun getClass(): String = classTokens.joinToString(" ")
@@ -152,12 +283,16 @@ open class IosBaseNativeImpl(
                 classTokens += token
             }
         }
+        syncUserInteractionEnabled()
+        syncLayoutMetadataToUikit()
     }
 
     override fun removeClass(className: String) {
         for (token in className.trim().split(Regex("\\s+"))) {
             classTokens.remove(token)
         }
+        syncUserInteractionEnabled()
+        syncLayoutMetadataToUikit()
     }
 
     override fun hasClass(className: String): Boolean = classTokens.contains(className.trim())
@@ -205,7 +340,9 @@ open class IosBaseNativeImpl(
     override fun getBorderType(): BootstrapType? = borderType
 
     protected open fun onBootstrapAppearanceChanged() {
-        val bg = UikitGeometryAndColorUtil.resolveBootstrapColor(bgType)
+        val allowBsColor = allowsBootstrapNonControlColor() || isInCustomStyleEngineSubtree()
+        if (!allowBsColor) return
+        val bg = UikitGeometryAndColorUtil.resolveBootstrapColor(bgType ?: getType())
         if (bg != null) {
             uiView.backgroundColor = bg.toUiColor()
         }
@@ -332,6 +469,7 @@ open class IosBaseNativeImpl(
 
     override fun setPosition(position: PositionMode?) {
         positionMode = position
+        syncLayoutMetadataToUikit()
     }
 
     override fun getPosition(): PositionMode? = positionMode
@@ -359,20 +497,74 @@ open class IosBaseNativeImpl(
 
     override fun isVisible(): Boolean = !uiView.hidden
 
+    private fun isPointerEventsNoneFromAttributesOrClasses(): Boolean {
+        if (attributesMap["pointer-events"]?.equals("none", ignoreCase = true) == true) return true
+        if (attributesMap["layerPassThrough"]?.equals("true", ignoreCase = true) == true) return true
+        if (classTokens.contains("gui-layer-pass-through")) return true
+        if (rawLayoutComponentStyle?.getPointerEvents() == CssPointerEvents.NONE) return true
+        if (rawLayoutComputedStyle?.pointerEventsEnabled == false) return true
+        return false
+    }
+
+    protected fun syncUserInteractionEnabled() {
+        pointerEventsNoneState = isPointerEventsNoneFromAttributesOrClasses()
+        uiView.userInteractionEnabled = enabledState && !pointerEventsNoneState
+    }
+
     override fun setEnabled(enabled: Boolean) {
-        uiView.userInteractionEnabled = enabled
+        enabledState = enabled
         (uiView as? UIControl)?.enabled = enabled
         uiView.alpha = if (enabled) 1.0 else 0.55
+        syncUserInteractionEnabled()
     }
 
-    override fun isEnabled(): Boolean =
-        (uiView as? UIControl)?.enabled ?: uiView.userInteractionEnabled
+    override fun isEnabled(): Boolean = enabledState
+
+    override fun setFocusable(focusable: Boolean) {
+        focusableState = focusable
+        UikitFocusRegistry.setFocusable(uiView, focusable)
+        if (!focusable) {
+            setFocusedState(false)
+            runOnMainThread {
+                if (isDisposed) return@runOnMainThread
+                uiView.endEditing(true)
+                if (uiView.isFirstResponder) {
+                    uiView.resignFirstResponder()
+                }
+                uiView.setNeedsFocusUpdate()
+            }
+        } else {
+            runOnMainThread {
+                if (isDisposed) return@runOnMainThread
+                uiView.setNeedsFocusUpdate()
+            }
+        }
+    }
+
+    override fun isFocusable(): Boolean = focusableState
 
     override fun setOpacity(opacity: Float) {
-        uiView.alpha = opacity.coerceIn(0f, 1f).toDouble()
+        val clamped = opacity.coerceIn(0f, 1f)
+        val pendingTarget = activeOpacityTransitionTarget
+        if (pendingTarget != null) {
+            if (abs(clamped - pendingTarget) < 1e-4f) {
+                return
+            }
+            cancelNativeAnimator("opacity")
+        }
+        uiView.alpha = clamped.toDouble()
     }
 
-    override fun getOpacity(): Float = uiView.alpha.toFloat()
+    override fun getOpacity(): Float {
+        if (activeOpacityTransitionTarget != null) {
+            val presentation = uiView.layer.presentationLayer()
+            if (presentation != null) {
+                return presentation.opacity
+            }
+            activeOpacityTransitionFrom?.let { return it }
+        }
+        return uiView.alpha.toFloat()
+    }
 
     override fun setTooltipText(tooltip: String?) {
         tooltipText = tooltip
@@ -381,6 +573,11 @@ open class IosBaseNativeImpl(
     override fun getTooltipText(): String? = tooltipText
 
     override fun setAttribute(name: String, value: String?) {
+        if (value == null) {
+            attributesMap.remove(name)
+        } else {
+            attributesMap[name] = value
+        }
         when (name.lowercase()) {
             "id", "accessibilityidentifier" -> {
                 if (uiView.respondsToSelector(sel_registerName("setAccessibilityIdentifier:"))) {
@@ -388,21 +585,35 @@ open class IosBaseNativeImpl(
                 }
             }
             "accessibilitylabel", "aria-label" -> uiView.accessibilityLabel = value
+            "pointer-events", "layerpassthrough" -> {
+                syncUserInteractionEnabled()
+                syncLayoutMetadataToUikit()
+            }
+            "z-index", "zindex", "layerzindex", "data-style-engine" -> syncLayoutMetadataToUikit()
         }
+    }
+
+    override fun setMargin(margin: EdgeInsets) {
+        this.margin = margin
+        syncLayoutMetadataToUikit()
     }
 
     override fun setPreferredSize(size: Size?) {
         preferredSize = size
         if (size != null) {
+            val savedTransform = uiView.transform
+            uiView.transform = CGAffineTransformMakeTranslation(0.0, 0.0)
             uiView.frame.useContents {
                 uiView.setFrame(CGRectMake(origin.x, origin.y, size.width.toDouble(), size.height.toDouble()))
             }
+            uiView.transform = savedTransform
             (uiView.superview as? UikitFlexContainerView)?.setChildPreferredSize(
                 uiView,
                 size.width.toDouble(),
                 size.height.toDouble()
             )
         }
+        syncLayoutMetadataToUikit()
     }
 
     override fun getBounds(): Rect = uiView.frame.useContents {
@@ -422,11 +633,71 @@ open class IosBaseNativeImpl(
         }
     }
 
-    override fun setMargin(margin: EdgeInsets) {
-        this.margin = margin
+    internal fun resolveEffectiveCssPosition(): CssPosition {
+        rawLayoutComponentStyle?.getPosition()?.let { return it }
+        when (rawLayoutComputedStyle?.position?.trim()?.lowercase()) {
+            "relative" -> return CssPosition.RELATIVE
+            "absolute" -> return CssPosition.ABSOLUTE
+            "fixed" -> return CssPosition.FIXED
+            "sticky" -> return CssPosition.STICKY
+            "static" -> return CssPosition.STATIC
+        }
+        return when (positionMode) {
+            PositionMode.RELATIVE -> CssPosition.RELATIVE
+            PositionMode.ABSOLUTE -> CssPosition.ABSOLUTE
+            PositionMode.FIXED -> CssPosition.FIXED
+            PositionMode.STICKY -> CssPosition.STICKY
+            PositionMode.STATIC, null -> CssPosition.STATIC
+        }
+    }
+
+    internal fun resolveEffectiveTransform2D(): CssTransform2D {
+        rawLayoutComponentStyle?.getTransform()?.let { return it }
+        rawLayoutComputedStyle?.transform2D?.let { return it }
+        return CssTransform2D.parse(rawLayoutComputedStyle?.transform)
+    }
+
+    internal fun syncLayoutMetadataToUikit() {
+        val pos = resolveEffectiveCssPosition()
+        val top = rawLayoutComponentStyle?.getTop() ?: rawLayoutComputedStyle?.top?.let { CssLength.parse(it) }
+        val right = rawLayoutComponentStyle?.getRight() ?: rawLayoutComputedStyle?.right?.let { CssLength.parse(it) }
+        val bottom = rawLayoutComponentStyle?.getBottom() ?: rawLayoutComputedStyle?.bottom?.let { CssLength.parse(it) }
+        val left = rawLayoutComponentStyle?.getLeft() ?: rawLayoutComputedStyle?.left?.let { CssLength.parse(it) }
+        val wLen = rawLayoutComponentStyle?.getWidth() ?: rawLayoutComputedStyle?.width?.let { CssLength.parse(it) }
+        val hLen = rawLayoutComponentStyle?.getHeight() ?: rawLayoutComputedStyle?.height?.let { CssLength.parse(it) }
+        val z = rawLayoutComponentStyle?.getZIndex()
+            ?: rawLayoutComputedStyle?.zIndex
+            ?: attributesMap["z-index"]?.toIntOrNull()
+            ?: attributesMap["zIndex"]?.toIntOrNull()
+            ?: attributesMap["layerZIndex"]?.toIntOrNull()
+            ?: 0
+        val tf = resolveEffectiveTransform2D()
+        UikitViewLayoutRegistry.update(uiView) {
+            UikitNodeLayoutMetadata(
+                position = pos,
+                top = top,
+                right = right,
+                bottom = bottom,
+                left = left,
+                width = wLen,
+                height = hLen,
+                margin = margin,
+                zIndex = z,
+                transform2D = tf,
+                pointerEventsNone = pointerEventsNoneState,
+                customStyleEngine = attributesMap["data-style-engine"] == "custom"
+            )
+        }
+        uiView.layer.zPosition = z.toDouble()
+        if (activeAnimators["transform"] == null) {
+            val dims = uiView.bounds.useContents { size.width to size.height }
+            uiView.transform = UikitViewLayoutRegistry.buildCgAffineTransform(tf, dims.first, dims.second)
+        }
+        (uiView.superview as? UikitFlexContainerView)?.setNeedsLayout()
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
+        rawLayoutComputedStyle = style
         val filtered = style.copyFilteredForSystemComponent(
             allowTypography = allowsTypographyStyleOverrides,
             allowAestheticSkin = allowsAestheticStyleSkinning
@@ -434,12 +705,21 @@ open class IosBaseNativeImpl(
         filtered.visibility?.let { vis ->
             uiView.hidden = vis == CssVisibility.HIDDEN || vis == CssVisibility.COLLAPSE
         }
-        filtered.pointerEventsEnabled.let { pe ->
-            uiView.userInteractionEnabled = pe
-        }
+        style.margin?.let { setMargin(it.toEdgeInsets()) }
+        style.padding?.let { setPadding(it.toEdgeInsets()) }
+        syncUserInteractionEnabled()
+        syncLayoutMetadataToUikit()
         if (allowsAestheticStyleSkinning) {
-            uiView.alpha = filtered.opacity.coerceIn(0f, 1f).toDouble()
-            filtered.backgroundColor?.let { uiView.backgroundColor = it.toUiColor() }
+            setOpacity(filtered.opacity)
+            filtered.backgroundColor?.let { bg ->
+                val pendingBg = activeBackgroundColorTransitionTarget
+                if (pendingBg == null || bg != pendingBg) {
+                    if (pendingBg != null) {
+                        cancelNativeAnimator("background-color")
+                    }
+                    uiView.backgroundColor = bg.toUiColor()
+                }
+            }
             filtered.borderColor?.let { uiView.layer.borderColor = it.toCgColor() }
             filtered.borderWidthPx?.let { uiView.layer.borderWidth = it.toDouble() }
             val radiusPt = filtered.borderRadiusPx ?: filtered.borderRadius?.topLeft?.value
@@ -462,17 +742,24 @@ open class IosBaseNativeImpl(
     protected open fun applyTypographyFromStyle(style: ComputedStyle) {}
 
     override fun applyComponentStyle(style: ComponentStyle) {
-        applyComputedStyle(
-            style.toComputedStyle().resolveForState(
-                hovered = hovered,
-                focused = focused,
-                active = activePressed,
-                enabled = isEnabled()
-            )
+        rawLayoutComponentStyle = style
+        val resolvedComputed = style.toComputedStyle().resolveForState(
+            hovered = hovered,
+            focused = focused,
+            active = activePressed,
+            enabled = isEnabled()
         )
+        applyComputedStyle(resolvedComputed)
     }
 
     override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
+        bootstrap.getPointerEvents()?.let { pe ->
+            if (pe == BootstrapPointerEvents.NONE) {
+                attributesMap["pointer-events"] = "none"
+            } else {
+                attributesMap.remove("pointer-events")
+            }
+        }
         setType(bootstrap.getType())
         setOutline(bootstrap.isOutline())
         setSize(bootstrap.getSize())
@@ -495,6 +782,8 @@ open class IosBaseNativeImpl(
         setPosition(bootstrap.getPosition())
         setMarginAll(bootstrap.getMargin())
         setPaddingAll(bootstrap.getPadding())
+        syncUserInteractionEnabled()
+        syncLayoutMetadataToUikit()
     }
 
     override fun setCustomCursor(cursor: CssCursorValue?) {
@@ -526,15 +815,16 @@ open class IosBaseNativeImpl(
     override fun isHoveredState(): Boolean = hovered
 
     override fun setFocusedState(focused: Boolean) {
-        this.focused = focused
-        if (focused) {
+        val coerced = if (!enabledState || !focusableState) false else focused
+        this.focused = coerced
+        if (coerced) {
             uiView.becomeFirstResponder()
         } else if (uiView.isFirstResponder) {
             uiView.resignFirstResponder()
         }
     }
 
-    override fun isFocusedState(): Boolean = focused
+    override fun isFocusedState(): Boolean = if (!enabledState || !focusableState) false else focused
 
     override fun setActivePressedState(active: Boolean) {
         this.activePressed = active
@@ -555,34 +845,293 @@ open class IosBaseNativeImpl(
         spec: CssTransitionSpec,
         onComplete: () -> Unit
     ): Boolean {
-        val durationSec = spec.durationMs.toDouble().coerceAtLeast(1.0) / 1000.0
-        val timing = spec.timingFunction.toCssString().lowercase()
-        val options = when {
-            spec.timingFunction.isLinear || timing.contains("linear") -> UIViewAnimationOptionCurveLinear
-            timing.contains("ease-out") -> UIViewAnimationOptionCurveEaseOut
-            else -> UIViewAnimationOptionCurveEaseInOut
+        if (isDisposed || (nativeWidget.uiView as Any?) == null) {
+            return false
         }
-        val targetVal = toValue.trim().toDoubleOrNull()
-        UIView.animateWithDuration(
-            duration = durationSec,
-            delay = spec.delayMs.toDouble().coerceAtLeast(0.0) / 1000.0,
-            options = options,
-            animations = {
-                when (property.lowercase()) {
-                    "opacity" -> if (targetVal != null) uiView.alpha = targetVal.coerceIn(0.0, 1.0)
-                    "transform", "scale" -> if (targetVal != null) {
-                        uiView.setTransform(CGAffineTransformMakeScale(targetVal, targetVal))
-                    }
-                    "background-color" -> {
-                        if (toValue.startsWith("#")) {
-                            parseHexColor(toValue)?.let { uiView.backgroundColor = it.toUiColor() }
+        val rawProp = property.trim().lowercase()
+        val canonicalKey = when (rawProp) {
+            "opacity", "alpha" -> "opacity"
+            "transform", "scale" -> "transform"
+            "left", "top", "width", "height" -> rawProp
+            "background-color" -> "background-color"
+            else -> return false
+        }
+
+        val viewWidthPt = uiView.bounds.useContents { size.width }.roundToInt()
+        val viewHeightPt = uiView.bounds.useContents { size.height }.roundToInt()
+
+        var targetAlpha: Double? = null
+        var fromAlpha: Double? = null
+        var targetTransform: CValue<CGAffineTransform>? = null
+        var fromTransform: CValue<CGAffineTransform>? = null
+        var targetFrameScalar: Double? = null
+        var fromFrameScalar: Double? = null
+        var targetBgColor: RgbaColor? = null
+        var fromBgColor: RgbaColor? = null
+
+        when (canonicalKey) {
+            "opacity" -> {
+                targetAlpha = toValue.trim().toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: return false
+                fromAlpha = fromValue?.trim()?.toDoubleOrNull()?.coerceIn(0.0, 1.0)
+            }
+            "transform" -> {
+                val isScaleOnly = rawProp == "scale"
+                targetTransform = buildCgAffineTransform(toValue, isScaleOnly, viewWidthPt, viewHeightPt) ?: return false
+                fromTransform = fromValue?.let { buildCgAffineTransform(it, isScaleOnly, viewWidthPt, viewHeightPt) }
+            }
+            "left", "top", "width", "height" -> {
+                targetFrameScalar = parseCssPx(toValue) ?: return false
+                fromFrameScalar = fromValue?.let { parseCssPx(it) }
+            }
+            "background-color" -> {
+                if (!allowsAestheticStyleSkinning || backgroundGradient != null) return false
+                targetBgColor = RgbaColor.fromCss(toValue) ?: return false
+                fromBgColor = fromValue?.let { RgbaColor.fromCss(it) }
+            }
+        }
+
+        var completionFired = false
+        val fireCompletionOnce: () -> Unit = {
+            if (!completionFired) {
+                completionFired = true
+                dispatchCompletionOnLogicThread(onComplete)
+            }
+        }
+
+        if (canonicalKey == "opacity" && targetAlpha != null) {
+            activeOpacityTransitionFrom = (fromAlpha ?: uiView.alpha).toFloat().coerceIn(0f, 1f)
+            activeOpacityTransitionTarget = targetAlpha.toFloat()
+        } else if (canonicalKey == "background-color" && targetBgColor != null) {
+            activeBackgroundColorTransitionTarget = targetBgColor
+        }
+
+        val durationMs = spec.durationMs.toDouble().coerceAtLeast(0.0)
+        val delayMs = spec.delayMs.toDouble().coerceAtLeast(0.0)
+
+        runOnMainThread {
+            if (isDisposed) {
+                if (canonicalKey == "opacity") {
+                    activeOpacityTransitionTarget = null
+                    activeOpacityTransitionFrom = null
+                }
+                if (canonicalKey == "background-color") activeBackgroundColorTransitionTarget = null
+                fireCompletionOnce()
+                return@runOnMainThread
+            }
+
+            val hadActiveForProp = activeAnimators.containsKey(canonicalKey)
+            if (hadActiveForProp) {
+                val prevTargetOpacity = activeOpacityTransitionTarget
+                val prevFromOpacity = activeOpacityTransitionFrom
+                val prevTargetBg = activeBackgroundColorTransitionTarget
+                cancelNativeAnimator(canonicalKey)
+                if (canonicalKey == "opacity") {
+                    activeOpacityTransitionTarget = prevTargetOpacity
+                    activeOpacityTransitionFrom = prevFromOpacity
+                }
+                if (canonicalKey == "background-color") activeBackgroundColorTransitionTarget = prevTargetBg
+            }
+
+            val applyTargetValues: () -> Unit = {
+                when (canonicalKey) {
+                    "opacity" -> targetAlpha?.let { uiView.alpha = it }
+                    "transform" -> targetTransform?.let { uiView.setTransform(it) }
+                    "left" -> targetFrameScalar?.let { xPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(xPt, origin.y, size.width, size.height))
                         }
                     }
+                    "top" -> targetFrameScalar?.let { yPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, yPt, size.width, size.height))
+                        }
+                    }
+                    "width" -> targetFrameScalar?.let { wPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, origin.y, wPt.coerceAtLeast(0.0), size.height))
+                        }
+                    }
+                    "height" -> targetFrameScalar?.let { hPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, origin.y, size.width, hPt.coerceAtLeast(0.0)))
+                        }
+                    }
+                    "background-color" -> targetBgColor?.let { uiView.backgroundColor = it.toUiColor() }
                 }
-            },
-            completion = { _ -> onComplete() }
-        )
+            }
+
+            if (durationMs <= 0.0 && delayMs <= 0.0) {
+                applyTargetValues()
+                if (canonicalKey == "opacity") {
+                    activeOpacityTransitionTarget = null
+                    activeOpacityTransitionFrom = null
+                }
+                if (canonicalKey == "background-color") activeBackgroundColorTransitionTarget = null
+                fireCompletionOnce()
+                return@runOnMainThread
+            }
+
+            if (!hadActiveForProp) {
+                when (canonicalKey) {
+                    "opacity" -> fromAlpha?.let { uiView.alpha = it }
+                    "transform" -> fromTransform?.let { uiView.setTransform(it) }
+                    "left" -> fromFrameScalar?.let { xPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(xPt, origin.y, size.width, size.height))
+                        }
+                    }
+                    "top" -> fromFrameScalar?.let { yPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, yPt, size.width, size.height))
+                        }
+                    }
+                    "width" -> fromFrameScalar?.let { wPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, origin.y, wPt.coerceAtLeast(0.0), size.height))
+                        }
+                    }
+                    "height" -> fromFrameScalar?.let { hPt ->
+                        uiView.frame.useContents {
+                            uiView.setFrame(CGRectMake(origin.x, origin.y, size.width, hPt.coerceAtLeast(0.0)))
+                        }
+                    }
+                    "background-color" -> fromBgColor?.let { uiView.backgroundColor = it.toUiColor() }
+                }
+            }
+
+            runCatching {
+                val timingParams = createCubicTimingParameters(spec.timingFunction)
+                val animator = UIViewPropertyAnimator(
+                    duration = (durationMs / 1000.0).coerceAtLeast(0.001),
+                    timingParameters = timingParams
+                )
+                activeAnimators[canonicalKey] = animator
+                activeAnimatorCompletions[canonicalKey] = fireCompletionOnce
+                animator.addAnimations {
+                    applyTargetValues()
+                }
+                animator.addCompletion { _ ->
+                    if (activeAnimators[canonicalKey] === animator) {
+                        activeAnimators.remove(canonicalKey)
+                        activeAnimatorCompletions.remove(canonicalKey)
+                        if (canonicalKey == "opacity") {
+                            activeOpacityTransitionTarget = null
+                            activeOpacityTransitionFrom = null
+                        } else if (canonicalKey == "background-color") {
+                            activeBackgroundColorTransitionTarget = null
+                        }
+                    }
+                    fireCompletionOnce()
+                }
+                val delaySec = delayMs / 1000.0
+                if (delaySec > 0.0) {
+                    animator.startAnimationAfterDelay(delaySec)
+                } else {
+                    animator.startAnimation()
+                }
+            }.onFailure {
+                if (canonicalKey == "opacity") {
+                    activeOpacityTransitionTarget = null
+                    activeOpacityTransitionFrom = null
+                }
+                if (canonicalKey == "background-color") activeBackgroundColorTransitionTarget = null
+                activeAnimators.remove(canonicalKey)
+                activeAnimatorCompletions.remove(canonicalKey)
+                applyTargetValues()
+                fireCompletionOnce()
+            }
+        }
         return true
+    }
+
+    private fun createCubicTimingParameters(tf: CssTimingFunction): UICubicTimingParameters {
+        if (tf.isLinear) {
+            return UICubicTimingParameters(animationCurve = UIViewAnimationCurve.UIViewAnimationCurveLinear)
+        }
+        return UICubicTimingParameters(
+            controlPoint1 = CGPointMake(tf.x1.toDouble().coerceIn(0.0, 1.0), tf.y1.toDouble()),
+            controlPoint2 = CGPointMake(tf.x2.toDouble().coerceIn(0.0, 1.0), tf.y2.toDouble())
+        )
+    }
+
+    private fun buildCgAffineTransform(
+        raw: String,
+        isScaleOnly: Boolean,
+        widthPt: Int,
+        heightPt: Int
+    ): CValue<CGAffineTransform>? {
+        val trimmed = raw.trim()
+        if (isScaleOnly) {
+            val s = trimmed.toDoubleOrNull() ?: return null
+            return CGAffineTransformMakeScale(s, s)
+        }
+        val cleaned = trimmed.replace("!important", "", ignoreCase = true).trim()
+        if (cleaned.isEmpty() || cleaned.equals("none", ignoreCase = true)) {
+            return CGAffineTransformMakeTranslation(0.0, 0.0)
+        }
+        if (!isSupportedCssTransformExpression(cleaned)) return null
+        val tf = CssTransform2D.parse(cleaned)
+        val (dx, dy) = tf.resolveTranslationPx(widthPt, heightPt)
+        var result = CGAffineTransformMakeTranslation(dx.toDouble(), dy.toDouble())
+        if (tf.rotateDeg != 0f) {
+            result = CGAffineTransformRotate(result, tf.rotateDeg.toDouble() * PI / 180.0)
+        }
+        if (tf.scaleX != 1f || tf.scaleY != 1f) {
+            result = CGAffineTransformScale(result, tf.scaleX.toDouble(), tf.scaleY.toDouble())
+        }
+        return result
+    }
+
+    private fun isSupportedCssTransformExpression(cleaned: String): Boolean {
+        val fnRegex = Regex("""([a-zA-Z0-9]+)\(([^)]*)\)""")
+        val matches = fnRegex.findAll(cleaned).toList()
+        if (matches.isEmpty()) return false
+        for (m in matches) {
+            if (m.groupValues[1].lowercase() !in SUPPORTED_TRANSFORM_FUNCTIONS) return false
+        }
+        return cleaned.replace(fnRegex, "").trim().isEmpty()
+    }
+
+    private fun parseCssPx(raw: String): Double? {
+        val cleaned = raw.replace("!important", "", ignoreCase = true).trim().lowercase()
+        if (cleaned.isEmpty() || cleaned.endsWith("%") || cleaned == "auto" || cleaned == "none") return null
+        val numPart = when {
+            cleaned.endsWith("px") -> cleaned.removeSuffix("px").trim()
+            cleaned.endsWith("pt") -> cleaned.removeSuffix("pt").trim()
+            else -> cleaned
+        }
+        return numPart.toDoubleOrNull()?.takeIf { it.isFinite() }
+    }
+
+    private fun cancelNativeAnimator(canonicalKey: String) {
+        val prevAnimator = activeAnimators.remove(canonicalKey)
+        val prevCompletion = activeAnimatorCompletions.remove(canonicalKey)
+        if (canonicalKey == "opacity") {
+            activeOpacityTransitionTarget = null
+            activeOpacityTransitionFrom = null
+        } else if (canonicalKey == "background-color") {
+            activeBackgroundColorTransitionTarget = null
+        }
+        runCatching { prevAnimator?.stopAnimation(true) }
+        prevCompletion?.invoke()
+    }
+
+    private fun runOnMainThread(block: () -> Unit) {
+        if (NSThread.isMainThread) {
+            block()
+        } else {
+            dispatch_async(dispatch_get_main_queue()) {
+                block()
+            }
+        }
+    }
+
+    private fun dispatchCompletionOnLogicThread(onComplete: () -> Unit) {
+        if (GenericUiThreading.isSplitThreadingEnabled && !GenericUiThreading.isOnLogicThread()) {
+            GenericUiThreading.runOnLogic(onComplete)
+        } else {
+            onComplete()
+        }
     }
 
     override fun scheduleDelayed(delayMs: Int, action: () -> Unit): Boolean {
@@ -675,16 +1224,19 @@ open class IosBaseNativeImpl(
     override fun dispose() {
         if (isDisposed) return
         isDisposed = true
+        for (key in activeAnimators.keys.toList()) {
+            cancelNativeAnimator(key)
+        }
+        UikitViewLayoutRegistry.remove(uiView)
+        UikitFocusRegistry.remove(uiView)
         uiView.removeFromSuperview()
     }
 
-    private fun parseHexColor(hex: String): com.nexustools.genericui.style.color.RgbaColor? {
-        val clean = hex.trim().removePrefix("#")
-        if (clean.length != 6 && clean.length != 8) return null
-        val r = clean.substring(0, 2).toIntOrNull(16) ?: return null
-        val g = clean.substring(2, 4).toIntOrNull(16) ?: return null
-        val b = clean.substring(4, 6).toIntOrNull(16) ?: return null
-        val a = if (clean.length == 8) clean.substring(6, 8).toIntOrNull(16) ?: 255 else 255
-        return com.nexustools.genericui.style.color.RgbaColor(r, g, b, a)
+    private companion object {
+        val SUPPORTED_TRANSFORM_FUNCTIONS = setOf(
+            "translate", "translate3d", "translatex", "translatey",
+            "scale", "scale3d", "scalex", "scaley",
+            "rotate", "rotatez"
+        )
     }
 }

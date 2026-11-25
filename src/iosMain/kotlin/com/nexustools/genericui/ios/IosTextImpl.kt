@@ -10,7 +10,9 @@ import com.nexustools.genericui.enums.bootstrap.TextTransform
 import com.nexustools.genericui.enums.css.CssTextDecoration
 import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.typography.TextNativeImpl
+import com.nexustools.genericui.style.color.BootstrapColorPalette
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.policy.AestheticStylePolicy
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.NSLineBreakByClipping
 import platform.UIKit.NSLineBreakByTruncatingTail
@@ -25,14 +27,16 @@ import platform.UIKit.labelColor
  * `allowsAestheticStyleSkinning = false`).
  */
 class IosTextImpl(
-    val label: UILabel = UILabel(frame = CGRectMake(0.0, 0.0, 200.0, 24.0))
+    val label: UILabel = UILabel(frame = CGRectMake(0.0, 0.0, 200.0, 24.0)),
+    classPrefix: String = "text"
 ) : IosBaseNativeImpl(
     nativeWidget = UikitViewHandle(label),
-    componentClassPrefix = "text"
+    componentClassPrefix = classPrefix
 ), TextNativeImpl<UikitViewHandle> {
 
     override val allowsTypographyStyleOverrides: Boolean = true
-    override val allowsAestheticStyleSkinning: Boolean = false
+    override val allowsAestheticStyleSkinning: Boolean =
+        AestheticStylePolicy.isBootstrapSpecificNonControlTagOrPrefix("", classPrefix)
 
     private var rawText: String = ""
     private var maxLinesValue: Int? = null
@@ -84,6 +88,7 @@ class IosTextImpl(
     }
 
     override fun onBootstrapAppearanceChanged() {
+        super.onBootstrapAppearanceChanged()
         refreshRenderedText()
     }
 
@@ -114,8 +119,17 @@ class IosTextImpl(
             fontFamily = style?.fontFamily,
             italic = UikitGeometryAndColorUtil.fontWeightToCssItalic(style?.fontStyle)
         )
-        val color = UikitGeometryAndColorUtil.resolveBootstrapColor(getTextColorType())?.toUiColor()
+        val allowBsColor = allowsBootstrapColorForStyledSpec()
+        val styledBadgeFg = if (allowBsColor) {
+            getType()?.takeIf { it != BootstrapType.NONE }?.let {
+                BootstrapColorPalette.resolveForegroundOn(it, UikitGeometryAndColorUtil.isDarkActive()).toUiColor()
+            }
+        } else {
+            null
+        }
+        val color = (if (allowBsColor) UikitGeometryAndColorUtil.resolveBootstrapColor(getTextColorType())?.toUiColor() else null)
             ?: style?.textColor?.toUiColor()
+            ?: styledBadgeFg
             ?: defaultTextColor()
 
         label.font = font

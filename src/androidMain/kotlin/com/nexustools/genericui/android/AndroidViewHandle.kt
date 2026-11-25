@@ -9,10 +9,14 @@ import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
 import com.nexustools.genericui.enums.bootstrap.FlexWrap
 import com.nexustools.genericui.enums.bootstrap.JustifyContent
+import com.nexustools.genericui.enums.bootstrap.OverflowBehavior
+import com.nexustools.genericui.enums.css.CssPosition
 import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.geometry.EdgeInsets
 import com.nexustools.genericui.geometry.Rect
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.theme.SystemThemeDetector
+import com.nexustools.genericui.style.transition.CssTransform2D
 import kotlin.math.roundToInt
 
 /**
@@ -64,8 +68,17 @@ class AndroidViewHandle(
     var layerBottomPx: Int? = null
     var layerZIndex: Int = 0
     var layerPassThrough: Boolean = false
+    var cssPointerEventsNone: Boolean = false
     var widthPercent: Float? = null
     var heightPercent: Float? = null
+    var cssPosition: CssPosition = CssPosition.STATIC
+    var cssTop: CssLength? = null
+    var cssRight: CssLength? = null
+    var cssBottom: CssLength? = null
+    var cssLeft: CssLength? = null
+    var cssTransform2D: CssTransform2D = CssTransform2D.IDENTITY
+    var isWindowRootHost: Boolean = false
+    var overflowBehavior: OverflowBehavior? = null
     var onViewMutated: (() -> Unit)? = null
 
     /**

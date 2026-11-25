@@ -37,6 +37,22 @@ object AndroidLauncher {
 
         ensureApplicationConfigured(descriptor)
 
+        for ((fragmentClass, fragmentId) in descriptor.fragmentIds) {
+            val route = descriptor.fragmentRoutes[fragmentClass].orEmpty()
+            @Suppress("UNCHECKED_CAST")
+            FragmentRegistry.registerMetadata(fragmentClass as KClass<IFragment>, fragmentId, route)
+        }
+        for ((fragmentClass, route) in descriptor.fragmentRoutes) {
+            if (!descriptor.fragmentIds.containsKey(fragmentClass)) {
+                @Suppress("UNCHECKED_CAST")
+                val typedClass = fragmentClass as KClass<IFragment>
+                FragmentRegistry.registerMetadata(
+                    typedClass,
+                    FragmentRegistry.resolveFragmentId(typedClass),
+                    route
+                )
+            }
+        }
         for ((fragmentClass, factory) in descriptor.fragmentRegistrations) {
             @Suppress("UNCHECKED_CAST")
             FragmentRegistry.register(fragmentClass as KClass<IFragment>, factory)

@@ -174,6 +174,18 @@ class IosTextInputImpl(
         textView.setEditable(enabled && !readOnlyMode)
     }
 
+    override fun setFocusable(focusable: Boolean) {
+        UikitFocusRegistry.setFocusable(textField, focusable)
+        UikitFocusRegistry.setFocusable(textView, focusable)
+        super<IosBaseNativeImpl>.setFocusable(focusable)
+    }
+
+    override fun dispose() {
+        UikitFocusRegistry.remove(textField)
+        UikitFocusRegistry.remove(textView)
+        super.dispose()
+    }
+
     private fun rebuildInputSubviews() {
         for (sub in hostContainer.subviews.filterIsInstance<platform.UIKit.UIView>()) {
             sub.removeFromSuperview()

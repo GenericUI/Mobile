@@ -468,9 +468,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
                         if (hostedFragment === fragment && !isDestroyed) {
                             if (activeChild != null && hs.precompiledStyleSheet == null && hs.themeStyleSheet == null) {
                                 runCatching {
-                                    Application.current?.getStyleSheets()?.forEach { sheet ->
-                                        activeChild.applyPrecompiledStyleSheet(sheet)
-                                    }
+                                    Application.current?.applyActiveStyleSheetsTo(activeChild)
                                 }
                             }
                             mountFragmentAndroidView(fragment)
@@ -502,12 +500,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         }
         if (!(fragment is FragmentHostFragment && fragment.hostSystem.precompiledStyleSheet != null)) {
             runCatching {
-                val app = Application.current
-                if (app != null) {
-                    for (sheet in app.getStyleSheets()) {
-                        fragment.applyPrecompiledStyleSheet(sheet)
-                    }
-                }
+                Application.current?.applyActiveStyleSheetsTo(fragment)
             }
         }
         runCatching {
@@ -613,6 +606,7 @@ abstract class GenericUiFragmentActivity : AppCompatActivity() {
         lifecycleBridge.dispatchDestroy()
         AndroidExtensionRuntimeBridge.notifyActivityDestroyed(this)
         hostedFragment = null
+        activityWindow.dispose()
         super.onDestroy()
     }
 

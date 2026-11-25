@@ -1,12 +1,9 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
-import android.content.res.ColorStateList
 import android.view.View
 import android.widget.ProgressBar
-import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.nativeimpl.feedback.ProgressBarNativeImpl
-import com.nexustools.genericui.style.color.BootstrapColorPalette
 
 /**
  * Android horizontal `android.widget.ProgressBar` implementation of [ProgressBarNativeImpl].
@@ -54,20 +51,18 @@ class AndroidProgressBarImpl : AndroidBaseNativeImpl("com.google.android.materia
 
     override fun syncAndroidView() {
         super.syncAndroidView()
-        runCatching {
-            val pb = nativeWidget.androidView as? ProgressBar ?: return@runCatching
-            pb.max = 1000
-            val activeIndeterminate = indeterminateFlag || busyFlag
-            pb.isIndeterminate = activeIndeterminate
-            if (!activeIndeterminate) {
-                pb.progress = (progressValue * 1000f).toInt().coerceIn(0, 1000)
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val pb = nativeWidget.androidView as? ProgressBar ?: return@runCatching
+                pb.max = 1000
+                val activeIndeterminate = indeterminateFlag || busyFlag
+                pb.isIndeterminate = activeIndeterminate
+                if (!activeIndeterminate) {
+                    pb.progress = (progressValue * 1000f).toInt().coerceIn(0, 1000)
+                }
+                pb.progressTintList = null
+                pb.indeterminateTintList = null
             }
-            val isDark = AndroidViewHandle.isDarkTheme()
-            val resolvedType = getType()?.takeIf { it != BootstrapType.NONE } ?: BootstrapType.PRIMARY
-            val tintArgb = BootstrapColorPalette.resolveColor(resolvedType, isDark, BootstrapColorPalette.activeThemeConfig).toArgbInt()
-            val tintList = ColorStateList.valueOf(tintArgb)
-            pb.progressTintList = tintList
-            pb.indeterminateTintList = tintList
         }
     }
 }

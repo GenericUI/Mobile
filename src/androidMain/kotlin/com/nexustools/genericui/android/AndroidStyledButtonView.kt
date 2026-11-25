@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.Gravity
+import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatButton
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -57,6 +58,11 @@ class AndroidStyledButtonView(
                 }
             }
         }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
+        if (implProvider()?.nativeWidget?.layerPassThrough == true) return false
+        return super.dispatchTouchEvent(event)
     }
 
     override fun onDraw(canvas: Canvas) {

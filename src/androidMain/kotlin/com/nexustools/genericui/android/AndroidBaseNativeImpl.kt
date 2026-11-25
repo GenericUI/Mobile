@@ -1,11 +1,16 @@
 package com.nexustools.genericui.android
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.LinearInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.TextView
 import com.nexustools.genericui.component.layout.LayerAlignment
@@ -13,6 +18,7 @@ import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.*
 import com.nexustools.genericui.enums.css.CssDisplay
 import com.nexustools.genericui.enums.css.CssPointerEvents
+import com.nexustools.genericui.enums.css.CssPosition
 import com.nexustools.genericui.enums.css.CssUnit
 import com.nexustools.genericui.enums.css.CssVisibility
 import com.nexustools.genericui.enums.ui.ThemeMode
@@ -31,11 +37,15 @@ import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.css.CssAspectRatio
 import com.nexustools.genericui.style.css.CssCursorValue
 import com.nexustools.genericui.style.css.CssLength
+import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.mapper.BootstrapClassMapper
 import com.nexustools.genericui.style.mapper.BootstrapStyleSnapshot
+import com.nexustools.genericui.style.policy.AestheticStylePolicy
 import com.nexustools.genericui.style.theme.SystemThemeDetector
 import com.nexustools.genericui.style.transition.CssTransform2D
 import com.nexustools.genericui.style.transition.CssTransitionSpec
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -51,10 +61,16 @@ import kotlin.math.roundToInt
 open class AndroidBaseNativeImpl(
     viewClassName: String = "android.view.View",
     override val componentClassPrefix: String = "",
-    initialView: View? = null
+    initialView: View? = null,
+    initialTagName: String = ""
 ) : NativeImpl<AndroidViewHandle> {
 
-    override val nativeWidget: AndroidViewHandle = AndroidViewHandle(viewClassName, initialView)
+    override val nativeWidget: AndroidViewHandle = AndroidViewHandle(viewClassName, initialView).also {
+        if (initialTagName.isNotBlank()) {
+            it.attributes["data-genericui-tag"] = initialTagName
+            it.attributes["tagName"] = initialTagName
+        }
+    }
 
     val gestureRecognizer: MobileGestureRecognizer = MobileGestureRecognizer()
 
@@ -71,23 +87,153 @@ open class AndroidBaseNativeImpl(
     protected var explicitGapDp: Int? = null
     protected var baseComponentStyle: ComponentStyle? = null
     protected var baseComputedStyle: ComputedStyle? = null
+    protected var rawLayoutComponentStyle: ComponentStyle? = null
+    protected var rawLayoutComputedStyle: ComputedStyle? = null
     private var lastAppliedBootstrapWidth: BootstrapWidth? = null
     private var lastAppliedBootstrapHeight: BootstrapHeight? = null
 
+    open val componentTagName: String
+        get() = nativeWidget.attributes["data-genericui-tag"]
+            ?: nativeWidget.attributes["tagName"]
+            ?: ""
+
+    internal fun isInCustomStyleEngineSubtree(): Boolean {
+        if (nativeWidget.attributes["data-style-engine"] == "custom") return true
+        var cur: AndroidViewHandle? = nativeWidget.parentHandle
+        while (cur != null) {
+            if (cur.attributes["data-style-engine"] == "custom") return true
+            cur = cur.parentHandle
+        }
+        return false
+    }
+
     protected open fun allowsSystemAestheticStyles(): Boolean =
         this is AndroidStyledContainerImpl ||
+            this is AndroidStyledComponentImpl ||
             this is AndroidStyledButtonImpl ||
-            (this is AndroidTextImpl && (
-                nativeWidget.classes.contains("binging-mode-queue-overlay-label") ||
-                    nativeWidget.classes.contains("badge") ||
-                    nativeWidget.classes.contains("player-time-pill")
-                ))
+            AestheticStylePolicy.isExplicitlyStyledTagOrPrefix(componentTagName, componentClassPrefix) ||
+            isCardComponent() ||
+            isToastComponent() ||
+            (this is AndroidTextImpl && nativeWidget.classes.contains("badge")) ||
+            isInCustomStyleEngineSubtree()
+
+    protected open fun allowsBackdropBlur(): Boolean =
+        this is AndroidStyledContainerImpl ||
+            this is AndroidStyledComponentImpl ||
+            this is AndroidStyledButtonImpl
+
+    protected open fun allowsBootstrapButtonTinting(): Boolean =
+        this is AndroidButtonImpl && this !is AndroidStyledButtonImpl
+
+    internal fun allowsBootstrapTintingForControl(): Boolean =
+        allowsBootstrapButtonTinting() || allowsBootstrapColorForStyledSpec()
+
+    protected open fun allowsBootstrapNonControlColor(): Boolean =
+        AestheticStylePolicy.isBootstrapSpecificNonControlTagOrPrefix(componentTagName, componentClassPrefix)
+
+    protected open fun allowsBootstrapColorForStyledSpec(): Boolean =
+        this is AndroidStyledButtonImpl || allowsBootstrapNonControlColor() || isInCustomStyleEngineSubtree()
+
+    internal fun snapshotForStyledVisuals(): BootstrapStyleSnapshot =
+        if (allowsBootstrapColorForStyledSpec()) {
+            styleSnapshot
+        } else {
+            styleSnapshot.copy(
+                type = null,
+                backgroundType = null,
+                textColorType = null,
+                borderType = null
+            )
+        }
+
+    internal fun sanitizeIncomingStyledVisuals(spec: StyledVisualSpec): StyledVisualSpec {
+        if (allowsBootstrapColorForStyledSpec()) return spec
+        val semType = styleSnapshot.type?.takeIf { it.isSemantic }
+            ?: styleSnapshot.backgroundType?.takeIf { it.isSemantic }
+        val textType = styleSnapshot.textColorType?.takeIf { it.isSemantic }
+        val borderType = styleSnapshot.borderType?.takeIf { it.isSemantic }
+        if (semType == null && textType == null && borderType == null) return spec
+
+        val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val explicitBg = rawLayoutComponentStyle?.getBackgroundColor() ?: baseComputedStyle?.backgroundColor
+        val explicitFg = rawLayoutComponentStyle?.getTextColor() ?: baseComputedStyle?.textColor
+        val explicitBorder = rawLayoutComponentStyle?.getBorderColor() ?: baseComputedStyle?.borderColor
+
+        var sanitized = spec
+        if (explicitBg == null && semType != null && !styleSnapshot.outline) {
+            val bsBg = BootstrapColorPalette.resolveColor(semType, isDark)
+            if (sanitized.backgroundColor == bsBg) {
+                sanitized = sanitized.copy(backgroundColor = null)
+            }
+        }
+        if (explicitFg == null && (semType != null || textType != null)) {
+            val bsFg = textType?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+                ?: semType?.let {
+                    if (styleSnapshot.outline) BootstrapColorPalette.resolveColor(it, isDark)
+                    else BootstrapColorPalette.resolveForegroundOn(it)
+                }
+            if (bsFg != null && sanitized.textColor == bsFg) {
+                sanitized = sanitized.copy(textColor = null)
+            }
+        }
+        if (explicitBorder == null && (borderType != null || (semType != null && styleSnapshot.outline))) {
+            val bsBorder = (borderType ?: semType)?.let { BootstrapColorPalette.resolveColor(it, isDark) }
+            if (bsBorder != null && sanitized.borderColor == bsBorder) {
+                val clearWidth = rawLayoutComponentStyle?.borderWidthPx == null &&
+                    rawLayoutComputedStyle?.borderWidthPx == null &&
+                    styleSnapshot.borderWidth == null &&
+                    sanitized.borderWidthPx == 1f
+                sanitized = sanitized.copy(
+                    borderColor = null,
+                    borderWidthPx = if (clearWidth) null else sanitized.borderWidthPx,
+                    borderStyle = if (clearWidth) null else sanitized.borderStyle
+                )
+            }
+        }
+        return sanitized
+    }
+
+    internal fun resolveEffectiveCssPosition(): CssPosition {
+        rawLayoutComponentStyle?.getPosition()?.let { return it }
+        val rawPos = rawLayoutComputedStyle?.position?.trim()?.lowercase()
+        when (rawPos) {
+            "relative" -> return CssPosition.RELATIVE
+            "absolute" -> return CssPosition.ABSOLUTE
+            "fixed" -> return CssPosition.FIXED
+            "sticky" -> return CssPosition.STICKY
+            "static" -> return CssPosition.STATIC
+        }
+        return when (styleSnapshot.position) {
+            PositionMode.RELATIVE -> CssPosition.RELATIVE
+            PositionMode.ABSOLUTE -> CssPosition.ABSOLUTE
+            PositionMode.FIXED -> CssPosition.FIXED
+            PositionMode.STICKY -> CssPosition.STICKY
+            PositionMode.STATIC, null -> CssPosition.STATIC
+        }
+    }
+
+    internal fun resolveEffectiveTransform2D(): CssTransform2D {
+        rawLayoutComponentStyle?.getTransform()?.let { return it }
+        rawLayoutComputedStyle?.transform2D?.let { return it }
+        return CssTransform2D.parse(rawLayoutComputedStyle?.transform)
+    }
 
     protected open fun allowsSystemTypographyStyles(): Boolean =
         allowsSystemAestheticStyles() || this is AndroidTextImpl || this is AndroidMarkdownViewImpl
 
     private var tooltipTextValue: String? = null
     protected var preferredSizeValue: Size? = null
+    private var focusableState: Boolean = true
+    private var focusedState: Boolean = false
+    private var hasSavedFocusableDefaults: Boolean = false
+    private var savedFocusable: Boolean = false
+    private var savedFocusableInTouchMode: Boolean = false
+    private var savedApi26Focusable: Int = View.FOCUSABLE_AUTO
+    private var savedDescendantFocusability: Int = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+    private val transitionLock = Any()
+    private val activePropertyCancelHooks = linkedMapOf<String, () -> Unit>()
+    @Volatile
+    private var activeOpacityTransitionTarget: Float? = null
 
     private var lastTouchX: Float = 0f
     private var lastTouchY: Float = 0f
@@ -95,8 +241,8 @@ open class AndroidBaseNativeImpl(
     private var touchStartY: Float = 0f
     private var touchDownTimestampMs: Long = 0L
     private var longPressFiredForTouch: Boolean = false
-    private var touchListenerAttached: Boolean = false
-    private var hoverListenerAttached: Boolean = false
+    private var touchListenerAttachedView: View? = null
+    private var hoverListenerAttachedView: View? = null
 
     protected var onClickListener: (() -> Unit)? = null
     protected var onDoubleClickListener: (() -> Unit)? = null
@@ -220,16 +366,29 @@ open class AndroidBaseNativeImpl(
         nativeWidget.attributes["systemThemeMode"] = if (isDark) "dark" else "light"
         val effectiveType = styleSnapshot.type ?: styleSnapshot.backgroundType
         val allowAesthetic = allowsSystemAestheticStyles()
+        val allowButtonTint = allowsBootstrapButtonTinting()
         val allowTypography = allowsSystemTypographyStyles()
-        val tintColor = (if (allowAesthetic) customStyleBackgroundColor else null)
-            ?: BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark, activeTheme)
+        val allowBootstrapColor = allowButtonTint || allowsBootstrapColorForStyledSpec()
+        val tintColor = when {
+            allowAesthetic && customStyleBackgroundColor != null -> customStyleBackgroundColor
+            allowBootstrapColor -> BootstrapColorPalette.resolveTintOrNull(effectiveType, isDark, activeTheme)
+            else -> null
+        }
         val fgColor = (if (allowTypography) customStyleTextColor else null)
-            ?: styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let {
-                BootstrapColorPalette.resolveColor(it, isDark, activeTheme)
-            }
-            ?: styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
-                BootstrapColorPalette.resolveForegroundOn(it, isDark, activeTheme)
-            }
+            ?: (if (allowBootstrapColor) {
+                styleSnapshot.textColorType?.takeIf { it != BootstrapType.NONE }?.let {
+                    BootstrapColorPalette.resolveColor(it, isDark, activeTheme)
+                }
+            } else {
+                null
+            })
+            ?: (if (allowBootstrapColor) {
+                styleSnapshot.type?.takeIf { it != BootstrapType.NONE && !styleSnapshot.outline }?.let {
+                    BootstrapColorPalette.resolveForegroundOn(it, isDark, activeTheme)
+                }
+            } else {
+                null
+            })
 
         if (tintColor == null) {
             nativeWidget.attributes["useSystemControlAppearance"] = "true"
@@ -383,6 +542,11 @@ open class AndroidBaseNativeImpl(
     protected fun isToastComponent(): Boolean =
         componentClassPrefix == "toast" || nativeWidget.classes.contains("toast")
 
+    protected fun isAlertComponent(): Boolean =
+        componentClassPrefix == "alert" ||
+            componentClassPrefix.startsWith("alert ") ||
+            nativeWidget.classes.contains("alert")
+
     protected open fun resolveDefaultPaddingPx(): EdgeInsets {
         val raw = nativeWidget.padding
         if (raw != EdgeInsets.ZERO) {
@@ -515,16 +679,40 @@ open class AndroidBaseNativeImpl(
             nativeWidget.layerTopPercent = nativeWidget.attributes["layerTopPercent"]?.takeIf { it.isNotBlank() }?.toFloatOrNull()
             nativeWidget.layerRightPx = nativeWidget.attributes["layerRightPx"]?.takeIf { it.isNotBlank() }?.toIntOrNull()
             nativeWidget.layerBottomPx = nativeWidget.attributes["layerBottomPx"]?.takeIf { it.isNotBlank() }?.toIntOrNull()
-            nativeWidget.layerZIndex = baseComponentStyle?.getZIndex()
+            nativeWidget.layerZIndex = rawLayoutComponentStyle?.getZIndex()
+                ?: baseComponentStyle?.getZIndex()
+                ?: rawLayoutComputedStyle?.zIndex
                 ?: baseComputedStyle?.zIndex
                 ?: nativeWidget.attributes["layerZIndex"]?.toIntOrNull()
+                ?: nativeWidget.attributes["zIndex"]?.toIntOrNull()
                 ?: 0
-            nativeWidget.layerPassThrough =
+            val hasLayerPassThroughFlag =
                 nativeWidget.attributes["layerPassThrough"]?.equals("true", ignoreCase = true) == true ||
-                    nativeWidget.classes.contains("gui-layer-pass-through") ||
+                    nativeWidget.classes.contains("gui-layer-pass-through")
+            val hasExplicitCssPointerNone =
+                nativeWidget.attributes["pointer-events"]?.equals("none", ignoreCase = true) == true ||
                     styleSnapshot.pointerEvents == BootstrapPointerEvents.NONE ||
+                    rawLayoutComponentStyle?.getPointerEvents() == CssPointerEvents.NONE ||
+                    rawLayoutComputedStyle?.pointerEventsEnabled == false ||
                     baseComponentStyle?.getPointerEvents() == CssPointerEvents.NONE ||
                     baseComputedStyle?.pointerEventsEnabled == false
+            nativeWidget.cssPointerEventsNone = !hasLayerPassThroughFlag && hasExplicitCssPointerNone
+            nativeWidget.layerPassThrough = hasLayerPassThroughFlag || hasExplicitCssPointerNone
+            nativeWidget.cssPosition = resolveEffectiveCssPosition()
+            nativeWidget.cssTop = rawLayoutComponentStyle?.getTop()
+                ?: rawLayoutComputedStyle?.top?.let { CssLength.parse(it) }
+            nativeWidget.cssRight = rawLayoutComponentStyle?.getRight()
+                ?: rawLayoutComputedStyle?.right?.let { CssLength.parse(it) }
+            nativeWidget.cssBottom = rawLayoutComponentStyle?.getBottom()
+                ?: rawLayoutComputedStyle?.bottom?.let { CssLength.parse(it) }
+            nativeWidget.cssLeft = rawLayoutComponentStyle?.getLeft()
+                ?: rawLayoutComputedStyle?.left?.let { CssLength.parse(it) }
+            nativeWidget.cssTransform2D = resolveEffectiveTransform2D()
+            nativeWidget.overflowBehavior = styleSnapshot.overflow
+                ?: rawLayoutComponentStyle?.getOverflowX()
+                ?: rawLayoutComponentStyle?.getOverflowY()
+                ?: rawLayoutComputedStyle?.overflowX
+                ?: rawLayoutComputedStyle?.overflowY
 
             val resolvedFlexDir = baseComponentStyle?.getFlexDirection()
                 ?: styleSnapshot.flexDirection
@@ -569,14 +757,27 @@ open class AndroidBaseNativeImpl(
                         view.visibility = targetVisibility
                     }
                     view.isEnabled = nativeWidget.enabled
-                    view.alpha = nativeWidget.alpha
+                    if (activeOpacityTransitionTarget == null) {
+                        view.alpha = nativeWidget.alpha
+                    }
 
+                    (view.layoutParams as? AndroidFlexContainerView.LayoutParams)?.let { lp ->
+                        lp.layerPassThrough = nativeWidget.layerPassThrough
+                        lp.cssPointerEventsNone = nativeWidget.cssPointerEventsNone
+                    }
                     val selfFlex = (nativeWidget.childHostViewGroup ?: view) as? AndroidFlexContainerView
                     if (selfFlex != null) {
                         selfFlex.aspectRatio = nativeWidget.aspectRatio
                         selfFlex.isLayered = nativeWidget.isLayeredContainer
                         selfFlex.isRatioContainer = nativeWidget.isRatioContainer
                         selfFlex.pointerEventsNone = nativeWidget.layerPassThrough
+                        selfFlex.cssPointerEventsNone = nativeWidget.cssPointerEventsNone
+                        selfFlex.cssPosition = nativeWidget.cssPosition
+                        selfFlex.isWindowRootHost = nativeWidget.isWindowRootHost
+                        val ov = nativeWidget.overflowBehavior
+                        val clips = ov == OverflowBehavior.HIDDEN || ov == OverflowBehavior.SCROLL || ov == OverflowBehavior.AUTO
+                        selfFlex.clipChildren = clips
+                        selfFlex.clipToPadding = clips
                     }
 
                     val effPad = resolveDefaultPaddingPx()
@@ -591,6 +792,11 @@ open class AndroidBaseNativeImpl(
                         view.setOnClickListener(null)
                         view.isClickable = false
                         view.isLongClickable = false
+                        view.isFocusable = false
+                        view.isFocusableInTouchMode = false
+                        if (android.os.Build.VERSION.SDK_INT >= 23) {
+                            view.isContextClickable = false
+                        }
                     } else if (onClickListener != null) {
                         view.isClickable = true
                         view.setOnClickListener { dispatchClick() }
@@ -604,9 +810,35 @@ open class AndroidBaseNativeImpl(
                         view.setOnClickListener(null)
                         view.isClickable = false
                     }
+                    if (!focusableState) {
+                        applyFocusableStateToView(view, false)
+                    }
+
+                    if (onPointerDownListener != null ||
+                        onPointerMoveListener != null ||
+                        onPointerUpListener != null ||
+                        onContextMenuListener != null
+                    ) {
+                        ensureTouchListenerAttached(view)
+                    }
+                    if (onPointerEnterListener != null || onPointerLeaveListener != null) {
+                        ensureHoverListenerAttached(view)
+                    }
 
                     if (nativeWidget.isLayerItem || nativeWidget.layerZIndex != 0 || view.translationZ != 0f) {
                         view.translationZ = nativeWidget.layerZIndex.toFloat()
+                    }
+                    if (activePropertyCancelHooks["transform"] == null) {
+                        val tf = nativeWidget.cssTransform2D
+                        val refW = view.width.takeIf { it > 0 } ?: AndroidViewHandle.dpToPx(nativeWidget.bounds.width)
+                        val refH = view.height.takeIf { it > 0 } ?: AndroidViewHandle.dpToPx(nativeWidget.bounds.height)
+                        val density = view.resources?.displayMetrics?.density?.takeIf { it > 0f } ?: AndroidViewHandle.density()
+                        val (rawDx, rawDy) = tf.resolveTranslationPx(refW, refH)
+                        view.translationX = if (tf.translateXIsPercent) rawDx else rawDx * density
+                        view.translationY = if (tf.translateYIsPercent) rawDy else rawDy * density
+                        view.scaleX = tf.scaleX
+                        view.scaleY = tf.scaleY
+                        view.rotation = tf.rotateDeg
                     }
 
                     val parentVg = view.parent
@@ -623,18 +855,23 @@ open class AndroidBaseNativeImpl(
     }
 
     protected open fun applyBaseSurfaceDrawable(view: View) {
+        if (!allowsSystemAestheticStyles()) return
         val isDark = AndroidViewHandle.isDarkTheme()
         val isCard = isCardComponent()
         val isToast = isToastComponent()
-        val isViewAsBanner = nativeWidget.classes.contains("view-as-banner")
-        val isQueueRow = nativeWidget.classes.contains("queue-row") || nativeWidget.classes.contains("handler-queue-row")
+        val isAlert = isAlertComponent()
+        val allowBsColor = allowsBootstrapNonControlColor() || isInCustomStyleEngineSubtree()
 
-        val bgType = styleSnapshot.backgroundType ?: if (isToast) styleSnapshot.type else null
+        val bgType = if (allowBsColor) (styleSnapshot.backgroundType ?: if (isToast || isAlert) styleSnapshot.type else null) else null
         val explicitBg = customStyleBackgroundColor
             ?: bgType?.takeIf { it != BootstrapType.NONE }?.let { BootstrapColorPalette.resolveColor(it, isDark) }
 
-        val borderTypeColor = styleSnapshot.borderType?.takeIf { it != BootstrapType.NONE }?.let {
-            BootstrapColorPalette.resolveColor(it, isDark)
+        val borderTypeColor = if (allowBsColor) {
+            styleSnapshot.borderType?.takeIf { it != BootstrapType.NONE }?.let {
+                BootstrapColorPalette.resolveColor(it, isDark)
+            }
+        } else {
+            null
         }
         val explicitBorderColor = customStyleBorderColor ?: borderTypeColor
 
@@ -642,46 +879,29 @@ open class AndroidBaseNativeImpl(
             customStyleBorderRadiusPx != null -> customStyleBorderRadiusPx!!
             styleSnapshot.borderRadius != null -> styleSnapshot.borderRadius!!.radiusPx.toFloat()
             isCard || isToast -> 10f
-            isViewAsBanner || isQueueRow -> 8f
             else -> 0f
         }
 
         val borderWidthDp = when {
             customStyleBorderWidthPx != null -> customStyleBorderWidthPx!!
             styleSnapshot.borderWidth != null -> styleSnapshot.borderWidth!!.widthPx.toFloat()
-            isCard || isToast || isViewAsBanner || isQueueRow -> 1f
+            isCard || isToast -> 1f
             else -> 0f
         }
 
-        if (explicitBg == null && !isCard && !isToast && !isViewAsBanner && !isQueueRow && borderWidthDp <= 0f && radiusDp <= 0f) {
+        if (explicitBg == null && !isCard && !isToast && borderWidthDp <= 0f && radiusDp <= 0f) {
             return
         }
 
         val fillArgb: Int = when {
             explicitBg != null -> explicitBg.toArgbInt()
-            isViewAsBanner -> if (isDark) 0xFF3A2E05.toInt() else 0xFFFFF3CD.toInt()
             isCard -> if (isDark) 0xFF1E222A.toInt() else 0xFFFFFFFF.toInt()
-            isQueueRow -> when {
-                nativeWidget.classes.contains("queue-row-unavailable") ||
-                    nativeWidget.classes.contains("handler-queue-row-trouble") ->
-                    if (isDark) 0xFF3B1A1E.toInt() else 0xFFFDE8E8.toInt()
-                nativeWidget.classes.contains("queue-row-trouble") ->
-                    if (isDark) 0xFF3A2E05.toInt() else 0xFFFFF8E1.toInt()
-                nativeWidget.classes.contains("queue-row-handled") ||
-                    nativeWidget.classes.contains("handler-queue-row-handled") ->
-                    if (isDark) 0xFF142E24.toInt() else 0xFFE8F5E9.toInt()
-                nativeWidget.classes.contains("queue-row-hot") ->
-                    if (isDark) 0xFF331B22.toInt() else 0xFFFFF0F0.toInt()
-                else -> if (isDark) 0xFF252A34.toInt() else 0xFFF8F9FC.toInt()
-            }
             else -> 0x00000000
         }
 
         val strokeArgb: Int = when {
             explicitBorderColor != null -> explicitBorderColor.toArgbInt()
-            isViewAsBanner -> if (isDark) 0xFF66520E.toInt() else 0xFFFFECB5.toInt()
             isCard -> if (isDark) 0xFF2E3440.toInt() else 0xFFE0E4EC.toInt()
-            isQueueRow -> if (isDark) 0xFF323846.toInt() else 0xFFE2E8F0.toInt()
             else -> if (isDark) 0xFF3B4252.toInt() else 0xFFCBD5E1.toInt()
         }
 
@@ -715,6 +935,7 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun applyComponentStyle(style: ComponentStyle) {
+        rawLayoutComponentStyle = style
         val allowAesthetic = allowsSystemAestheticStyles()
         val allowTypography = allowsSystemTypographyStyles()
         val filtered = style.copyFilteredForSystemComponent(
@@ -1010,9 +1231,74 @@ open class AndroidBaseNativeImpl(
 
     override fun isEnabled(): Boolean = nativeWidget.enabled
 
+    protected fun applyFocusableStateToView(view: View, focusable: Boolean) {
+        if (!focusable) {
+            if (!hasSavedFocusableDefaults) {
+                hasSavedFocusableDefaults = true
+                savedFocusable = view.isFocusable
+                savedFocusableInTouchMode = view.isFocusableInTouchMode
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    savedApi26Focusable = view.focusable
+                }
+                if (view is ViewGroup) {
+                    savedDescendantFocusability = view.descendantFocusability
+                }
+            }
+            view.isFocusable = false
+            view.isFocusableInTouchMode = false
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                view.focusable = View.NOT_FOCUSABLE
+            }
+            if (view is ViewGroup) {
+                view.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            }
+            if (view.hasFocus() || view.findFocus() != null) {
+                view.clearFocus()
+            }
+        } else if (hasSavedFocusableDefaults) {
+            view.isFocusable = savedFocusable
+            view.isFocusableInTouchMode = savedFocusableInTouchMode
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                view.focusable = savedApi26Focusable
+            }
+            if (view is ViewGroup) {
+                view.descendantFocusability = savedDescendantFocusability
+            }
+            hasSavedFocusableDefaults = false
+        }
+    }
+
+    override fun setFocusable(focusable: Boolean) {
+        focusableState = focusable
+        if (!focusable) {
+            setFocusedState(false)
+        }
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val view = nativeWidget.androidView ?: return@runCatching
+                applyFocusableStateToView(view, focusable)
+            }
+        }
+    }
+
+    override fun isFocusable(): Boolean = focusableState
+
+    override fun setFocusedState(focused: Boolean) {
+        focusedState = if (!isEnabled() || !focusableState) false else focused
+    }
+
+    override fun isFocusedState(): Boolean = if (!isEnabled() || !focusableState) false else focusedState
+
     override fun setOpacity(opacity: Float) {
         val clamped = opacity.coerceIn(0f, 1f)
         nativeWidget.alpha = clamped
+        val pendingTarget = activeOpacityTransitionTarget
+        if (pendingTarget != null) {
+            if (abs(clamped - pendingTarget) < 1e-4f) {
+                return
+            }
+            cancelNativePropertyTransition("opacity")
+        }
         AndroidViewHandle.runOnMainThread {
             runCatching { nativeWidget.androidView?.alpha = clamped }
         }
@@ -1067,6 +1353,7 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {
+        rawLayoutComputedStyle = style
         val allowAesthetic = allowsSystemAestheticStyles()
         val allowTypography = allowsSystemTypographyStyles()
         val filtered = style.copyFilteredForSystemComponent(
@@ -1147,54 +1434,239 @@ open class AndroidBaseNativeImpl(
         spec: CssTransitionSpec,
         onComplete: () -> Unit
     ): Boolean {
+        if (nativeWidget.disposed) return false
+        val view = nativeWidget.androidView ?: return false
+        val rawProp = property.trim().lowercase()
+        val canonicalKey = when (rawProp) {
+            "opacity", "alpha" -> "opacity"
+            "transform", "scale" -> "transform"
+            else -> return false
+        }
+
+        val isScaleOnly = rawProp == "scale"
+        val refW = view.width.takeIf { it > 0 } ?: nativeWidget.bounds.width
+        val refH = view.height.takeIf { it > 0 } ?: nativeWidget.bounds.height
+
+        var targetAlpha: Float? = null
+        var fromAlpha: Float? = null
+        var targetTransform: CssTransform2D? = null
+        var fromTransform: CssTransform2D? = null
+
+        when (canonicalKey) {
+            "opacity" -> {
+                targetAlpha = toValue.trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: return false
+                fromAlpha = fromValue?.trim()?.toFloatOrNull()?.coerceIn(0f, 1f)
+            }
+            "transform" -> {
+                targetTransform = parseAndroidTransformSpec(toValue, isScaleOnly) ?: return false
+                fromTransform = fromValue?.let { parseAndroidTransformSpec(it, isScaleOnly) }
+            }
+        }
+
         nativeWidget.attributes["lastTransitionProperty"] = property
         nativeWidget.attributes["viewPropertyAnimator:$property"] = "$fromValue->$toValue@${spec.durationMs}ms"
-        val view = nativeWidget.androidView
-        if (view == null) {
-            if (property == "opacity") {
-                toValue.toFloatOrNull()?.let { setOpacity(it) }
-            }
-            onComplete()
-            return true
-        }
-        val dispatchCompletion: () -> Unit = {
-            if (com.nexustools.genericui.core.GenericUI.activeFactory != null &&
-                com.nexustools.genericui.threading.GenericUiThreading.isSplitThreadingEnabled &&
-                !com.nexustools.genericui.threading.GenericUiThreading.isOnLogicThread()
-            ) {
-                com.nexustools.genericui.threading.GenericUiThreading.runOnLogic(onComplete)
-            } else {
-                onComplete()
+
+        val finished = AtomicBoolean(false)
+        val cancelled = AtomicBoolean(false)
+        val dispatchCompletionOnce: () -> Unit = {
+            if (finished.compareAndSet(false, true)) {
+                AndroidViewHandle.dispatchOnLogicThread(onComplete)
             }
         }
-        AndroidViewHandle.runOnMainThread {
-            runCatching {
-                val anim = view.animate()
-                    .setDuration(spec.durationMs.toLong())
-                    .setStartDelay(spec.delayMs.toLong())
-                    .setInterpolator(
-                        PathInterpolator(
-                            spec.timingFunction.x1,
-                            spec.timingFunction.y1,
-                            spec.timingFunction.x2,
-                            spec.timingFunction.y2
-                        )
-                    )
-                    .withEndAction { dispatchCompletion() }
-                when (property) {
-                    "opacity" -> toValue.toFloatOrNull()?.let { anim.alpha(it) }
-                    "transform" -> {
-                        val tf = CssTransform2D.parse(toValue)
-                        val (dx, dy) = tf.resolveTranslationPx(view.width, view.height)
-                        anim.translationX(dx).translationY(dy).scaleX(tf.scaleX).scaleY(tf.scaleY).rotation(tf.rotateDeg)
+
+        var animatorRef: Animator? = null
+        lateinit var cancelHook: () -> Unit
+        cancelHook = {
+            if (cancelled.compareAndSet(false, true)) {
+                synchronized(transitionLock) {
+                    if (activePropertyCancelHooks[canonicalKey] === cancelHook) {
+                        activePropertyCancelHooks.remove(canonicalKey)
+                        if (canonicalKey == "opacity") {
+                            activeOpacityTransitionTarget = null
+                        }
                     }
                 }
-                anim.start()
+                AndroidViewHandle.runOnMainThread {
+                    runCatching { animatorRef?.cancel() }
+                    dispatchCompletionOnce()
+                }
+            }
+        }
+
+        val previousCancel: (() -> Unit)?
+        val hadActiveForProp: Boolean
+        synchronized(transitionLock) {
+            previousCancel = activePropertyCancelHooks.remove(canonicalKey)
+            hadActiveForProp = previousCancel != null
+            activePropertyCancelHooks[canonicalKey] = cancelHook
+            if (canonicalKey == "opacity") {
+                activeOpacityTransitionTarget = targetAlpha
+                targetAlpha?.let { nativeWidget.alpha = it }
+            }
+        }
+        previousCancel?.invoke()
+
+        val durationMs = spec.durationMs.toLong().coerceAtLeast(0L)
+        val delayMs = spec.delayMs.toLong().coerceAtLeast(0L)
+
+        AndroidViewHandle.runOnMainThread {
+            if (cancelled.get() || nativeWidget.disposed) {
+                synchronized(transitionLock) {
+                    if (activePropertyCancelHooks[canonicalKey] === cancelHook) {
+                        activePropertyCancelHooks.remove(canonicalKey)
+                        if (canonicalKey == "opacity") activeOpacityTransitionTarget = null
+                    }
+                }
+                dispatchCompletionOnce()
+                return@runOnMainThread
+            }
+
+            val applyTarget: () -> Unit = {
+                when (canonicalKey) {
+                    "opacity" -> targetAlpha?.let { view.alpha = it }
+                    "transform" -> targetTransform?.let { tf ->
+                        val w = view.width.takeIf { it > 0 } ?: refW
+                        val h = view.height.takeIf { it > 0 } ?: refH
+                        val (dx, dy) = tf.resolveTranslationPx(w, h)
+                        view.translationX = dx
+                        view.translationY = dy
+                        view.scaleX = tf.scaleX
+                        view.scaleY = tf.scaleY
+                        view.rotation = tf.rotateDeg
+                    }
+                }
+            }
+
+            if (durationMs == 0L && delayMs == 0L) {
+                runCatching { applyTarget() }
+                synchronized(transitionLock) {
+                    if (activePropertyCancelHooks[canonicalKey] === cancelHook) {
+                        activePropertyCancelHooks.remove(canonicalKey)
+                        if (canonicalKey == "opacity") activeOpacityTransitionTarget = null
+                    }
+                }
+                dispatchCompletionOnce()
+                return@runOnMainThread
+            }
+
+            runCatching {
+                val createdAnimator: ObjectAnimator = when (canonicalKey) {
+                    "opacity" -> {
+                        val startA = if (!hadActiveForProp && fromAlpha != null) fromAlpha else view.alpha
+                        view.alpha = startA
+                        ObjectAnimator.ofFloat(view, View.ALPHA, startA, targetAlpha!!)
+                    }
+                    else -> {
+                        val w = view.width.takeIf { it > 0 } ?: refW
+                        val h = view.height.takeIf { it > 0 } ?: refH
+                        val startDx: Float
+                        val startDy: Float
+                        val startSx: Float
+                        val startSy: Float
+                        val startRot: Float
+                        if (!hadActiveForProp && fromTransform != null) {
+                            val (fx, fy) = fromTransform.resolveTranslationPx(w, h)
+                            startDx = fx
+                            startDy = fy
+                            startSx = fromTransform.scaleX
+                            startSy = fromTransform.scaleY
+                            startRot = fromTransform.rotateDeg
+                        } else {
+                            startDx = view.translationX
+                            startDy = view.translationY
+                            startSx = view.scaleX
+                            startSy = view.scaleY
+                            startRot = view.rotation
+                        }
+                        view.translationX = startDx
+                        view.translationY = startDy
+                        view.scaleX = startSx
+                        view.scaleY = startSy
+                        view.rotation = startRot
+                        val endTf = targetTransform!!
+                        val (endDx, endDy) = endTf.resolveTranslationPx(w, h)
+                        ObjectAnimator.ofPropertyValuesHolder(
+                            view,
+                            PropertyValuesHolder.ofFloat(View.TRANSLATION_X, startDx, endDx),
+                            PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, startDy, endDy),
+                            PropertyValuesHolder.ofFloat(View.SCALE_X, startSx, endTf.scaleX),
+                            PropertyValuesHolder.ofFloat(View.SCALE_Y, startSy, endTf.scaleY),
+                            PropertyValuesHolder.ofFloat(View.ROTATION, startRot, endTf.rotateDeg)
+                        )
+                    }
+                }
+                createdAnimator.duration = durationMs
+                createdAnimator.startDelay = delayMs
+                createdAnimator.interpolator = if (spec.timingFunction.isLinear) {
+                    LinearInterpolator()
+                } else {
+                    PathInterpolator(
+                        spec.timingFunction.x1.coerceIn(0f, 1f),
+                        spec.timingFunction.y1,
+                        spec.timingFunction.x2.coerceIn(0f, 1f),
+                        spec.timingFunction.y2
+                    )
+                }
+                createdAnimator.addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        synchronized(transitionLock) {
+                            if (activePropertyCancelHooks[canonicalKey] === cancelHook) {
+                                activePropertyCancelHooks.remove(canonicalKey)
+                                if (canonicalKey == "opacity") {
+                                    activeOpacityTransitionTarget = null
+                                }
+                            }
+                        }
+                        dispatchCompletionOnce()
+                    }
+                })
+                animatorRef = createdAnimator
+                createdAnimator.start()
             }.onFailure {
-                dispatchCompletion()
+                runCatching { applyTarget() }
+                synchronized(transitionLock) {
+                    if (activePropertyCancelHooks[canonicalKey] === cancelHook) {
+                        activePropertyCancelHooks.remove(canonicalKey)
+                        if (canonicalKey == "opacity") activeOpacityTransitionTarget = null
+                    }
+                }
+                dispatchCompletionOnce()
             }
         }
         return true
+    }
+
+    private fun parseAndroidTransformSpec(raw: String, isScaleOnly: Boolean): CssTransform2D? {
+        val trimmed = raw.trim()
+        if (isScaleOnly) {
+            val s = trimmed.toFloatOrNull() ?: return null
+            return CssTransform2D(scaleX = s, scaleY = s)
+        }
+        val cleaned = trimmed.replace("!important", "", ignoreCase = true).trim()
+        if (cleaned.isEmpty() || cleaned.equals("none", ignoreCase = true)) {
+            return CssTransform2D.IDENTITY
+        }
+        val fnRegex = Regex("""([a-zA-Z0-9]+)\(([^)]*)\)""")
+        val matches = fnRegex.findAll(cleaned).toList()
+        if (matches.isEmpty()) return null
+        val supported = setOf(
+            "translate", "translate3d", "translatex", "translatey",
+            "scale", "scale3d", "scalex", "scaley",
+            "rotate", "rotatez"
+        )
+        if (matches.any { it.groupValues[1].lowercase() !in supported }) return null
+        if (cleaned.replace(fnRegex, "").trim().isNotEmpty()) return null
+        return CssTransform2D.parse(cleaned)
+    }
+
+    private fun cancelNativePropertyTransition(canonicalKey: String) {
+        val hook = synchronized(transitionLock) {
+            if (canonicalKey == "opacity") {
+                activeOpacityTransitionTarget = null
+            }
+            activePropertyCancelHooks[canonicalKey]
+        }
+        hook?.invoke()
     }
 
     override fun setAttribute(name: String, value: String?) {
@@ -1229,6 +1701,9 @@ open class AndroidBaseNativeImpl(
                     ) {
                         view.isClickable = false
                     }
+                }
+                if (!focusableState) {
+                    applyFocusableStateToView(view, false)
                 }
             }
         }
@@ -1296,8 +1771,8 @@ open class AndroidBaseNativeImpl(
     }
 
     private fun ensureHoverListenerAttached(view: View) {
-        if (hoverListenerAttached) return
-        hoverListenerAttached = true
+        if (hoverListenerAttachedView === view) return
+        hoverListenerAttachedView = view
         runCatching {
             view.setOnHoverListener { _, event ->
                 val pe = PointerEvent(x = event.x, y = event.y)
@@ -1342,10 +1817,11 @@ open class AndroidBaseNativeImpl(
     }
 
     private fun ensureTouchListenerAttached(view: View) {
-        if (touchListenerAttached) return
-        touchListenerAttached = true
+        if (touchListenerAttachedView === view) return
+        touchListenerAttachedView = view
         runCatching {
             view.setOnTouchListener { _, event ->
+                if (nativeWidget.layerPassThrough) return@setOnTouchListener false
                 val x = event.x
                 val y = event.y
                 lastTouchX = x
@@ -1402,6 +1878,13 @@ open class AndroidBaseNativeImpl(
     }
 
     override fun dispose() {
+        val hooks = synchronized(transitionLock) {
+            activeOpacityTransitionTarget = null
+            activePropertyCancelHooks.values.toList()
+        }
+        for (hook in hooks) {
+            hook.invoke()
+        }
         nativeWidget.dispose()
     }
 }

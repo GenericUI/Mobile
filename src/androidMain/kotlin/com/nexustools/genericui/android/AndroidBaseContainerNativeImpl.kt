@@ -12,8 +12,9 @@ import com.nexustools.genericui.core.NativeImpl
 open class AndroidBaseContainerNativeImpl(
     viewClassName: String = "android.widget.LinearLayout",
     componentClassPrefix: String = "container",
-    initialView: View? = null
-) : AndroidBaseNativeImpl(viewClassName, componentClassPrefix, initialView), AbstractContainerNativeImpl<AndroidViewHandle> {
+    initialView: View? = null,
+    initialTagName: String = ""
+) : AndroidBaseNativeImpl(viewClassName, componentClassPrefix, initialView, initialTagName), AbstractContainerNativeImpl<AndroidViewHandle> {
 
     protected val childNativeImpls = mutableListOf<NativeImpl<*>>()
 

@@ -3,150 +3,197 @@
 package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.component.layout.LayoutBackendTarget
-import com.nexustools.genericui.enums.css.CssBorderStyle
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toCgColor
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.layout.StyledContainerNativeImpl
+import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
+import com.nexustools.genericui.style.css.ComponentStyle
+import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.Gradient
-import com.nexustools.genericui.style.gradient.Gradient.LinearGradient
-import com.nexustools.genericui.style.gradient.Gradient.RadialGradient
+import com.nexustools.genericui.style.policy.AestheticStylePolicy
+import com.nexustools.genericui.system.style.StyledWidgetVisualController
 import kotlinx.cinterop.CValue
-import kotlinx.cinterop.useContents
-import platform.CoreGraphics.CGPointMake
 import platform.CoreGraphics.CGRect
 import platform.CoreGraphics.CGRectMake
-import platform.CoreGraphics.CGSizeMake
-import platform.Foundation.NSNumber
-import platform.Foundation.numberWithDouble
-import platform.QuartzCore.CAGradientLayer
-import platform.QuartzCore.kCAGradientLayerAxial
-import platform.QuartzCore.kCAGradientLayerRadial
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Full-fidelity CSS aesthetic UIKit container (`StyledContainer`) powered by [UikitFlexContainerView],
- * real `CALayer` borders/radii/shadows, `CAGradientLayer`, and `UIVisualEffectView` blur layers.
+ * `:system`'s [StyledWidgetVisualController], `:apple`'s [com.nexustools.genericui.apple.style.AppleStyledSurfaceHelper]
+ * (via [IosStyledVisualUtil]), and [UikitBackdropBlurController].
  */
 class IosStyledContainerImpl(
     frame: CValue<CGRect> = CGRectMake(0.0, 0.0, 0.0, 0.0),
     classPrefix: String = "styled-container",
-    val layoutTarget: LayoutBackendTarget = LayoutBackendTarget.IOS
+    val layoutTarget: LayoutBackendTarget = LayoutBackendTarget.IOS,
+    tagName: String = "div"
 ) : IosBaseContainerNativeImpl(
     nativeWidget = UikitViewHandle(UikitFlexContainerView(frame)),
-    componentClassPrefix = classPrefix
+    componentClassPrefix = classPrefix,
+    initialTagName = tagName
 ), StyledContainerNativeImpl<UikitViewHandle> {
 
     override val allowsAestheticStyleSkinning: Boolean = true
     override val allowsTypographyStyleOverrides: Boolean = false
 
-    private var currentVisuals: StyledVisualSpec = StyledVisualSpec()
-    private var gradientLayer: CAGradientLayer? = null
-    private val backdropController = UikitBackdropBlurController(uiView)
+    private val visualController = StyledWidgetVisualController(
+        allowsBootstrapTypeTint = AestheticStylePolicy.isBootstrapSpecificNonControlTagOrPrefix(tagName, classPrefix)
+    ).apply {
+        componentTagName = tagName
+        componentClassPrefix = classPrefix
+    }
+    private val chromeState = IosStyledVisualUtil.ChromeLayersState()
+    internal val backdropController = UikitBackdropBlurController(uiView)
 
-    private fun isTextBubbleComponent(): Boolean {
-        val tokens = componentClassPrefix.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        return tokens.any { token ->
-            val norm = token.removePrefix("genericui:")
-            norm == "text-bubble" || norm == "textbubble" || norm == "gui-text-bubble"
+    init {
+        (uiView as? UikitFlexContainerView)?.onLayoutSubviewsCallback = {
+            refreshChromeAfterLayout()
+        }
+        actionTarget.onHoveredChanged = { hovered ->
+            setHoveredState(hovered)
         }
     }
 
     override fun setStyledVisuals(visuals: StyledVisualSpec) {
-        val backend = visuals.forBackend(layoutTarget)
-        currentVisuals = if (isTextBubbleComponent()) backend.withoutBackdropFilter() else backend
+        syncControllerMetadata()
+        visualController.baseVisuals = visuals
         applyStyledVisuals()
     }
 
-    override fun getStyledVisuals(): StyledVisualSpec = currentVisuals
+    override fun getStyledVisuals(): StyledVisualSpec = resolveCurrentVisuals()
+
+    override fun setHoveredState(hovered: Boolean) {
+        super<IosBaseContainerNativeImpl>.setHoveredState(hovered && isEnabled())
+        visualController.hovered = isHoveredState()
+        applyStyledVisuals()
+    }
+
+    override fun setFocusedState(focused: Boolean) {
+        super<IosBaseContainerNativeImpl>.setFocusedState(focused && isEnabled())
+        visualController.focused = isFocusedState()
+        applyStyledVisuals()
+    }
+
+    override fun setActivePressedState(active: Boolean) {
+        super<IosBaseContainerNativeImpl>.setActivePressedState(active && isEnabled())
+        visualController.activePressed = isActivePressedState()
+        applyStyledVisuals()
+    }
+
+    override fun setEnabled(enabled: Boolean) {
+        super.setEnabled(enabled)
+        visualController.enabled = isEnabled()
+        if (!enabled) {
+            super<IosBaseContainerNativeImpl>.setHoveredState(false)
+            super<IosBaseContainerNativeImpl>.setFocusedState(false)
+            super<IosBaseContainerNativeImpl>.setActivePressedState(false)
+        }
+        applyStyledVisuals()
+    }
+
+    override fun applyComponentBootstrap(bootstrap: ComponentBootstrap) {
+        super<IosBaseContainerNativeImpl>.applyComponentBootstrap(bootstrap)
+        syncControllerMetadata()
+        applyStyledVisuals()
+    }
+
+    override fun onBootstrapAppearanceChanged() {
+        syncControllerMetadata()
+        applyStyledVisuals()
+    }
+
+    override fun applyComputedStyle(style: ComputedStyle) {
+        super<IosBaseContainerNativeImpl>.applyComputedStyle(style)
+        visualController.lastComputedStyle = style
+        applyStyledVisuals()
+    }
+
+    override fun applyComponentStyle(style: ComponentStyle) {
+        super<IosBaseContainerNativeImpl>.applyComponentStyle(style)
+        visualController.lastComponentStyle = style
+        visualController.invalidate()
+        applyStyledVisuals()
+    }
 
     override fun setBackgroundGradient(gradient: Gradient?) {
         super<IosBaseContainerNativeImpl>.setBackgroundGradient(gradient)
-        applyGradientLayer(gradient ?: currentVisuals.backgroundGradient)
+        val v = resolveCurrentVisuals()
+        chromeState.gradientLayer = IosStyledVisualUtil.applyGradientLayer(
+            uiView,
+            chromeState.gradientLayer,
+            gradient ?: v.backgroundGradient
+        )
+    }
+
+    fun resolveCurrentVisuals(): StyledVisualSpec {
+        syncControllerMetadata()
+        return visualController.resolveCurrentVisuals(
+            isDarkTheme = UikitGeometryAndColorUtil.isDarkActive(),
+            backendTarget = layoutTarget,
+            animatedOpacity = activeAnimatedOpacityOrNull()
+        )
+    }
+
+    private fun syncControllerMetadata() {
+        visualController.isCustomStyleEngine = isInCustomStyleEngineSubtree()
+        visualController.bootstrapSnapshot = rawBootstrapStyleSnapshot()
+        visualController.enabled = isEnabled()
+        visualController.hovered = isHoveredState()
+        visualController.focused = isFocusedState()
+        visualController.activePressed = isActivePressedState()
+        visualController.lastComponentStyle = rawLayoutComponentStyle
+        visualController.lastComputedStyle = rawLayoutComputedStyle
     }
 
     private fun applyStyledVisuals() {
-        val v = currentVisuals
-        v.backgroundColor?.let { uiView.backgroundColor = it.toUiColor() }
-        v.borderColor?.let { uiView.layer.borderColor = it.toCgColor() }
-        v.borderWidthPx?.let { width ->
-            uiView.layer.borderWidth = if (v.borderStyle == CssBorderStyle.NONE) 0.0 else width.toDouble()
+        val v = resolveCurrentVisuals()
+        IosStyledVisualUtil.applyLayerChrome(
+            view = uiView,
+            spec = v,
+            isFocused = isFocusedState(),
+            componentStyle = visualController.lastComponentStyle,
+            chromeState = chromeState
+        )
+        if (activeAnimatedOpacityOrNull() == null) {
+            v.opacity?.let { setOpacity(it) }
         }
-        v.borderRadiusPx?.let { radius ->
-            uiView.layer.cornerRadius = radius.toDouble()
-            uiView.clipsToBounds = radius > 0f
-        }
-        v.opacity?.let { uiView.alpha = it.coerceIn(0f, 1f).toDouble() }
         v.padding?.let { setPadding(it) }
         v.gapPx?.let { gap -> (uiView as? UikitFlexContainerView)?.itemGapPt = gap.toDouble() }
-        v.boxShadowColor?.let { shadowColor ->
-            uiView.layer.shadowColor = shadowColor.toCgColor()
-            uiView.layer.shadowOpacity = 0.28f
-            uiView.layer.shadowRadius = (v.boxShadowBlurPx ?: 6f).toDouble()
-            uiView.layer.shadowOffset = CGSizeMake(0.0, 2.0)
-        }
-        if (v.widthPx != null || v.heightPx != null) {
-            uiView.frame.useContents {
-                val w = (v.widthPx ?: size.width.toInt()).toDouble()
-                val h = (v.heightPx ?: size.height.toInt()).toDouble()
-                uiView.setFrame(CGRectMake(origin.x, origin.y, w, h))
-            }
-        }
-        applyGradientLayer(v.backgroundGradient ?: getBackgroundGradient())
-        applyBackdropBlur(v)
-    }
-
-    private fun applyGradientLayer(gradient: Gradient?) {
-        if (gradient == null) {
-            gradientLayer?.removeFromSuperlayer()
-            gradientLayer = null
-            return
-        }
-        val layer = gradientLayer ?: CAGradientLayer().also {
-            uiView.layer.insertSublayer(it, atIndex = 0u)
-            gradientLayer = it
-        }
-        layer.frame = uiView.bounds
-        layer.cornerRadius = uiView.layer.cornerRadius
-        when (gradient) {
-            is LinearGradient -> {
-                layer.type = kCAGradientLayerAxial
-                layer.colors = gradient.resolvedStops.mapNotNull { it.second.toCgColor() }
-                layer.locations = gradient.resolvedStops.map { NSNumber.numberWithDouble(it.first.toDouble()) }
-                val rad = (gradient.angleDegrees - 90.0) * PI / 180.0
-                val dx = cos(rad) * 0.5
-                val dy = sin(rad) * 0.5
-                layer.startPoint = CGPointMake(0.5 - dx, 0.5 - dy)
-                layer.endPoint = CGPointMake(0.5 + dx, 0.5 + dy)
-            }
-            is RadialGradient -> {
-                layer.type = kCAGradientLayerRadial
-                layer.colors = gradient.resolvedStops.mapNotNull { it.second.toCgColor() }
-                layer.locations = gradient.resolvedStops.map { NSNumber.numberWithDouble(it.first.toDouble()) }
-                layer.startPoint = CGPointMake(0.5, 0.5)
-                layer.endPoint = CGPointMake(1.0, 1.0)
-            }
-            else -> {
-                layer.colors = emptyList<Any>()
-            }
-        }
-    }
-
-    private fun applyBackdropBlur(visuals: StyledVisualSpec) {
-        if (isTextBubbleComponent()) {
-            backdropController.clear()
-            return
-        }
+        chromeState.gradientLayer = IosStyledVisualUtil.applyGradientLayer(
+            uiView,
+            chromeState.gradientLayer,
+            v.backgroundGradient ?: getBackgroundGradient()
+        )
         backdropController.apply(
-            visuals = visuals,
+            visuals = v,
             cornerRadiusPt = uiView.layer.cornerRadius,
-            clipsToBounds = uiView.clipsToBounds
+            clipsToBounds = uiView.clipsToBounds,
+            effectiveFilter = visualController.resolveEffectiveBackdropFilter(v)
+        )
+    }
+
+    private fun refreshChromeAfterLayout() {
+        val v = resolveCurrentVisuals()
+        IosStyledVisualUtil.applyLayerChrome(
+            view = uiView,
+            spec = v,
+            isFocused = isFocusedState(),
+            componentStyle = visualController.lastComponentStyle,
+            chromeState = chromeState
+        )
+        chromeState.gradientLayer = IosStyledVisualUtil.applyGradientLayer(
+            uiView,
+            chromeState.gradientLayer,
+            v.backgroundGradient ?: getBackgroundGradient()
+        )
+        backdropController.refreshOnLayoutIfNeeded(
+            visuals = v,
+            cornerRadiusPt = uiView.layer.cornerRadius,
+            clipsToBounds = uiView.clipsToBounds,
+            effectiveFilter = visualController.resolveEffectiveBackdropFilter(v)
         )
     }
 
     override fun dispose() {
+        (uiView as? UikitFlexContainerView)?.onLayoutSubviewsCallback = null
         backdropController.clear()
         super.dispose()
     }

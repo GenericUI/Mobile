@@ -86,6 +86,7 @@ open class IosWindowImpl(
         }
         navigationBar.setItems(listOf(navigationItem), animated = false)
         navigationBar.hidden = true
+        contentHostView.isWindowRootHost = true
         rootViewController.hostView.addSubview(navigationBar)
         rootViewController.hostView.addSubview(contentHostView)
         rootViewController.view.backgroundColor = defaultSystemBackgroundColor()
@@ -350,7 +351,11 @@ open class IosWindowImpl(
         applyAlwaysOnTopToUiWindow()
         UikitEnvironment.registeredKeyWindow = uiWindow
         UikitEnvironment.registeredRootViewController = rootViewController
-        uiWindow?.makeKeyAndVisible()
+        if (UikitEnvironment.hasHostedUiApplication()) {
+            uiWindow?.makeKeyAndVisible()
+        } else {
+            uiWindow?.hidden = false
+        }
         if (!windowFocusedState) {
             windowFocusedState = true
             focusListener?.invoke(true)
@@ -371,7 +376,11 @@ open class IosWindowImpl(
     }
 
     override fun bringToFront() {
-        uiWindow?.makeKeyAndVisible()
+        if (UikitEnvironment.hasHostedUiApplication()) {
+            uiWindow?.makeKeyAndVisible()
+        } else {
+            uiWindow?.hidden = false
+        }
         if (!windowFocusedState) {
             windowFocusedState = true
             focusListener?.invoke(true)

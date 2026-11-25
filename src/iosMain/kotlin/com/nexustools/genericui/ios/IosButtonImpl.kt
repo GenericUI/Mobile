@@ -2,24 +2,34 @@
 
 package com.nexustools.genericui.ios
 
+import com.nexustools.genericui.component.shell.Application
+import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
+import com.nexustools.genericui.enums.bootstrap.BootstrapSize
 import com.nexustools.genericui.enums.bootstrap.BootstrapType
+import com.nexustools.genericui.enums.ui.ThemeMode
 import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.action.ButtonNativeImpl
-import kotlinx.cinterop.useContents
+import com.nexustools.genericui.style.color.BootstrapColorPalette
+import com.nexustools.genericui.style.theme.SystemThemeDetector
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIButton
+import platform.UIKit.UIButtonConfiguration
+import platform.UIKit.UIButtonConfigurationCornerStyleCapsule
+import platform.UIKit.UIButtonConfigurationCornerStyleDynamic
+import platform.UIKit.UIButtonConfigurationSize
 import platform.UIKit.UIButtonTypeSystem
+import platform.UIKit.UIColor
 import platform.UIKit.UIControlEventTouchUpInside
 import platform.UIKit.UIControlStateNormal
 
 /**
  * Native iOS `UIButton.buttonWithType(UIButtonTypeSystem)` implementation of [ButtonNativeImpl].
  *
- * - Leaves `UIButton` 100% unmodified when [BootstrapType] is `NONE` or `null`.
- * - When [BootstrapType] != `NONE`, renders an empty-title native UIKit `UIButton` offscreen
- *   into a `CGBitmapContext` via [IosControlTintRenderUtil], tints pixels with the active
- *   `ThemeConfig`, applies the tinted `UIImage` via `setBackgroundImage(..., UIControlStateNormal)`,
- *   and paints contrasting foreground text/icon colors on top.
+ * - Leaves `UIButton` 100% unmodified (`configuration = null`, native `tintColor`) when
+ *   [BootstrapType] is `NONE` (or `null`), `!isOutline()`, and no custom border radius is set.
+ * - Uses genuine UIKit `UIButtonConfiguration` (`filledButtonConfiguration`, `plainButtonConfiguration`,
+ *   `grayButtonConfiguration`) + `UIBackgroundConfiguration` stroke/corner settings and native
+ *   `tintColor` for semantic [BootstrapType], outline, link, size, and pill/rounded variants.
  * - Standard control aesthetic skinning and typography CSS overrides are silently ignored.
  */
 class IosButtonImpl(
@@ -35,9 +45,10 @@ class IosButtonImpl(
     private var buttonText: String = ""
     private var buttonIcon: String? = null
     private val defaultTintColor = button.tintColor
-
-    var lastOffscreenTintedPixels: IntArray? = null
-        private set
+    private val defaultTitleColor = button.titleColorForState(UIControlStateNormal)
+    private val systemThemeListener: (ThemeMode) -> Unit = {
+        applyButtonAppearance()
+    }
 
     init {
         button.addTarget(
@@ -45,67 +56,139 @@ class IosButtonImpl(
             action = UikitControlActionTarget.SEL_PRIMARY_ACTION,
             forControlEvents = UIControlEventTouchUpInside
         )
+        SystemThemeDetector.addSystemThemeListener(systemThemeListener)
         applyButtonAppearance()
     }
 
     override fun setText(text: String) {
         buttonText = text
-        button.setTitle(text, forState = UIControlStateNormal)
+        applyButtonAppearance()
     }
 
     override fun getText(): String = buttonText
 
     override fun setIcon(icon: String?) {
         buttonIcon = icon
-        val image = UikitGeometryAndColorUtil.systemIconImage(icon)
-        button.setImage(image, forState = UIControlStateNormal)
+        applyButtonAppearance()
     }
 
     override fun getIcon(): String? = buttonIcon
 
     override fun isIconOnly(): Boolean = buttonText.isEmpty() && !buttonIcon.isNullOrEmpty()
 
+    override fun setBorderRadius(radius: BorderRadiusStyle?) {
+        super.setBorderRadius(radius)
+        applyButtonAppearance()
+    }
+
     override fun onBootstrapAppearanceChanged() {
         applyButtonAppearance()
     }
 
+    override fun dispose() {
+        SystemThemeDetector.removeSystemThemeListener(systemThemeListener)
+        super.dispose()
+    }
+
+    private fun isDarkModeActive(): Boolean {
+        Application.current?.getResolvedTheme()?.let { return it == ThemeMode.DARK }
+        val iosMode = IosApplicationImpl.activeInstance?.getThemeMode()
+        if (iosMode == ThemeMode.DARK) return true
+        if (iosMode == ThemeMode.LIGHT) return false
+        return UikitGeometryAndColorUtil.isDarkActive()
+    }
+
     private fun applyButtonAppearance() {
         val type = getType() ?: BootstrapType.NONE
-        if (type == BootstrapType.NONE) {
-            button.setBackgroundImage(null, forState = UIControlStateNormal)
-            button.setTitleColor(defaultTintColor, forState = UIControlStateNormal)
+        val outline = isOutline()
+        val borderRadius = getBorderRadius()
+        val iconImage = UikitGeometryAndColorUtil.systemIconImage(buttonIcon)
+
+        if (type == BootstrapType.NONE &&
+            !outline &&
+            (borderRadius == null || borderRadius == BorderRadiusStyle.NONE)
+        ) {
+            button.configuration = null
             button.tintColor = defaultTintColor
             button.backgroundColor = null
-            lastOffscreenTintedPixels = null
+            button.setBackgroundImage(null, forState = UIControlStateNormal)
+            button.setTitle(buttonText, forState = UIControlStateNormal)
+            button.setImage(iconImage, forState = UIControlStateNormal)
+            button.setTitleColor(defaultTitleColor ?: defaultTintColor, forState = UIControlStateNormal)
             return
         }
 
-        val (w, h) = button.bounds.useContents {
-            val bw = size.width.toInt().coerceAtLeast(120)
-            val bh = size.height.toInt().coerceAtLeast(44)
-            bw to bh
-        }
-        val dark = UikitGeometryAndColorUtil.isDarkActive()
+        val darkMode = isDarkModeActive()
         val themeConfig = IosApplicationImpl.activeInstance?.getThemeConfig()
-            ?: com.nexustools.genericui.style.color.BootstrapColorPalette.activeThemeConfig
-        val (image, pixels) = IosControlTintRenderUtil.renderEmptyTextTintedButtonImage(
-            width = w,
-            height = h,
-            type = type,
-            darkMode = dark,
-            outline = isOutline(),
-            themeConfig = themeConfig
-        )
-        lastOffscreenTintedPixels = pixels
-        button.setBackgroundImage(image, forState = UIControlStateNormal)
-        val fg = IosControlTintRenderUtil.resolveContrastingForeground(
-            type = type,
-            darkMode = dark,
-            outline = isOutline(),
-            themeConfig = themeConfig
-        )
-        val fgColor = fg.toUiColor()
-        button.setTitleColor(fgColor, forState = UIControlStateNormal)
-        button.tintColor = fgColor
+            ?: BootstrapColorPalette.activeThemeConfig
+
+        val config = when {
+            type == BootstrapType.LINK -> {
+                val linkColor = BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, darkMode, themeConfig).toUiColor()
+                button.tintColor = linkColor
+                UIButtonConfiguration.plainButtonConfiguration().apply {
+                    baseForegroundColor = linkColor
+                }
+            }
+            outline -> {
+                val accentUiColor = if (type == BootstrapType.NONE) {
+                    BootstrapColorPalette.resolveForegroundOn(BootstrapType.NONE, darkMode, themeConfig).toUiColor()
+                } else {
+                    BootstrapColorPalette.resolveColor(type, darkMode, themeConfig).toUiColor()
+                }
+                button.tintColor = accentUiColor
+                UIButtonConfiguration.plainButtonConfiguration().apply {
+                    baseForegroundColor = accentUiColor
+                    val bg = background
+                    bg.strokeColor = accentUiColor
+                    bg.strokeWidth = 1.5
+                    bg.backgroundColor = UIColor.clearColor
+                    background = bg
+                }
+            }
+            type == BootstrapType.NONE -> {
+                val fgUiColor = BootstrapColorPalette.resolveForegroundOn(BootstrapType.NONE, darkMode, themeConfig).toUiColor()
+                button.tintColor = defaultTintColor
+                UIButtonConfiguration.grayButtonConfiguration().apply {
+                    baseForegroundColor = fgUiColor
+                }
+            }
+            else -> {
+                val bgUiColor = BootstrapColorPalette.resolveColor(type, darkMode, themeConfig).toUiColor()
+                val fgUiColor = BootstrapColorPalette.resolveForegroundOn(type, darkMode, themeConfig).toUiColor()
+                button.tintColor = bgUiColor
+                UIButtonConfiguration.filledButtonConfiguration().apply {
+                    baseBackgroundColor = bgUiColor
+                    baseForegroundColor = fgUiColor
+                }
+            }
+        }
+
+        config.cornerStyle = if (borderRadius == BorderRadiusStyle.PILL || borderRadius == BorderRadiusStyle.CIRCLE) {
+            UIButtonConfigurationCornerStyleCapsule
+        } else {
+            UIButtonConfigurationCornerStyleDynamic
+        }
+        if (borderRadius != null && borderRadius != BorderRadiusStyle.PILL && borderRadius != BorderRadiusStyle.CIRCLE) {
+            val bg = config.background
+            bg.cornerRadius = UikitGeometryAndColorUtil.resolveBorderRadiusPt(borderRadius)
+            config.background = bg
+        }
+        config.buttonSize = when (getSize()) {
+            BootstrapSize.EXTRA_SMALL -> UIButtonConfigurationSize.UIButtonConfigurationSizeMini
+            BootstrapSize.SMALL -> UIButtonConfigurationSize.UIButtonConfigurationSizeSmall
+            BootstrapSize.LARGE, BootstrapSize.EXTRA_LARGE, BootstrapSize.EXTRA_EXTRA_LARGE ->
+                UIButtonConfigurationSize.UIButtonConfigurationSizeLarge
+            BootstrapSize.MEDIUM, null -> UIButtonConfigurationSize.UIButtonConfigurationSizeMedium
+        }
+        config.title = if (buttonText.isEmpty() && iconImage != null) null else buttonText
+        config.image = iconImage
+        if (iconImage != null && buttonText.isNotEmpty()) {
+            config.imagePadding = 6.0
+        }
+
+        button.setBackgroundImage(null, forState = UIControlStateNormal)
+        button.backgroundColor = null
+        button.configuration = config
     }
 }

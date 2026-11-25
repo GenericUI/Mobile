@@ -13,8 +13,10 @@ import platform.CoreGraphics.CGRectMake
  */
 open class IosContainerImpl(
     frame: CValue<CGRect> = CGRectMake(0.0, 0.0, 0.0, 0.0),
-    classPrefix: String = "container"
+    classPrefix: String = "container",
+    tagName: String = ""
 ) : IosBaseContainerNativeImpl(
     nativeWidget = UikitViewHandle(UikitFlexContainerView(frame)),
-    componentClassPrefix = classPrefix
+    componentClassPrefix = classPrefix,
+    initialTagName = tagName
 ), ContainerNativeImpl<UikitViewHandle>

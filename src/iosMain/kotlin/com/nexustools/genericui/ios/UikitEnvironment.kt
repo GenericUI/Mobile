@@ -33,6 +33,13 @@ object UikitEnvironment {
     fun safeSharedApplication(): UIApplication? =
         runCatching { UIApplication.sharedApplication }.getOrNull()
 
+    fun hasHostedUiApplication(): Boolean {
+        val app = safeSharedApplication() ?: return false
+        val hasDelegate = runCatching { app.delegate != null }.getOrDefault(false)
+        val hasScenes = runCatching { app.connectedScenes.isNotEmpty() }.getOrDefault(false)
+        return hasDelegate || hasScenes
+    }
+
     fun activeKeyWindow(): UIWindow? {
         registeredKeyWindow?.let { return it }
         val app = safeSharedApplication() ?: return null

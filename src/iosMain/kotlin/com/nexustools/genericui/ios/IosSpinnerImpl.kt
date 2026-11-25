@@ -4,7 +4,6 @@ package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.feedback.SpinnerNativeImpl
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIActivityIndicatorView
@@ -62,12 +61,6 @@ class IosSpinnerImpl : IosBaseNativeImpl(
                 captionLabel = this
             }
             lbl.text = clean
-        }
-    }
-
-    override fun onBootstrapAppearanceChanged() {
-        UikitGeometryAndColorUtil.resolveBootstrapColor(getType())?.toUiColor()?.let {
-            activityIndicator.color = it
         }
     }
 }

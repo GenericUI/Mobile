@@ -31,6 +31,7 @@ import com.nexustools.genericui.image.ImageDecodeOptions
 import com.nexustools.genericui.image.ImageLoader
 import com.nexustools.genericui.image.ImageSource
 import com.nexustools.genericui.image.PixelFormat
+import com.nexustools.genericui.jvm.style.JvmBackdropCapturePlanner
 import com.nexustools.genericui.nativeimpl.content.ImageNativeImpl
 import com.nexustools.genericui.res.Resources
 import com.nexustools.genericui.style.color.ImageTintMode
@@ -39,10 +40,7 @@ import com.nexustools.genericui.style.css.CssFilter
 import com.nexustools.genericui.style.css.CssLength
 import kotlinx.coroutines.Job
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
  * Android `androidx.appcompat.widget.AppCompatImageView` implementation of [ImageNativeImpl].
@@ -232,120 +230,9 @@ class AndroidImageImpl : AndroidBaseNativeImpl("androidx.appcompat.widget.AppCom
     }
 
     private fun buildColorMatrixForCssFilter(filter: CssFilter): ColorMatrix? {
-        var modified = false
-        val combined = ColorMatrix()
-
-        filter.grayscale?.takeIf { it > 0f }?.let { amt ->
-            val g = amt.coerceIn(0f, 1f)
-            val m = ColorMatrix().apply { setSaturation(1f - g) }
-            combined.postConcat(m)
-            modified = true
-        }
-
-        filter.sepia?.takeIf { it > 0f }?.let { amt ->
-            val s = amt.coerceIn(0f, 1f)
-            val invS = 1f - s
-            val sepiaMatrix = ColorMatrix(
-                floatArrayOf(
-                    invS + 0.393f * s, 0.769f * s, 0.189f * s, 0f, 0f,
-                    0.349f * s, invS + 0.686f * s, 0.168f * s, 0f, 0f,
-                    0.272f * s, 0.534f * s, invS + 0.131f * s, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            combined.postConcat(sepiaMatrix)
-            modified = true
-        }
-
-        filter.saturate?.takeIf { it != 1f }?.let { sat ->
-            val m = ColorMatrix().apply { setSaturation(sat.coerceAtLeast(0f)) }
-            combined.postConcat(m)
-            modified = true
-        }
-
-        filter.hueRotateDeg?.takeIf { it != 0f }?.let { deg ->
-            val rad = deg * (PI.toFloat() / 180f)
-            val cosVal = cos(rad)
-            val sinVal = sin(rad)
-            val lumR = 0.213f
-            val lumG = 0.715f
-            val lumB = 0.072f
-            val hueMatrix = ColorMatrix(
-                floatArrayOf(
-                    lumR + cosVal * (1f - lumR) + sinVal * (-lumR), lumG + cosVal * (-lumG) + sinVal * (-lumG), lumB + cosVal * (-lumB) + sinVal * (1f - lumB), 0f, 0f,
-                    lumR + cosVal * (-lumR) + sinVal * 0.143f, lumG + cosVal * (1f - lumG) + sinVal * 0.140f, lumB + cosVal * (-lumB) + sinVal * (-0.283f), 0f, 0f,
-                    lumR + cosVal * (-lumR) + sinVal * (-(1f - lumR)), lumG + cosVal * (-lumG) + sinVal * lumG, lumB + cosVal * (1f - lumB) + sinVal * lumB, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                )
-            )
-            combined.postConcat(hueMatrix)
-            modified = true
-        }
-
-        val brightnessBeforeInvert = filter.brightness == 0f && (filter.invert ?: 0f) > 0f
-        if (brightnessBeforeInvert) {
-            filter.brightness?.takeIf { it != 1f }?.let { b ->
-                val br = b.coerceAtLeast(0f)
-                combined.postConcat(ColorMatrix().apply { setScale(br, br, br, 1f) })
-                modified = true
-            }
-            filter.invert?.takeIf { it > 0f }?.let { amt ->
-                val inv = amt.coerceIn(0f, 1f)
-                val scale = 1f - 2f * inv
-                val offset = 255f * inv
-                combined.postConcat(
-                    ColorMatrix(
-                        floatArrayOf(
-                            scale, 0f, 0f, 0f, offset,
-                            0f, scale, 0f, 0f, offset,
-                            0f, 0f, scale, 0f, offset,
-                            0f, 0f, 0f, 1f, 0f
-                        )
-                    )
-                )
-                modified = true
-            }
-        } else {
-            filter.invert?.takeIf { it > 0f }?.let { amt ->
-                val inv = amt.coerceIn(0f, 1f)
-                val scale = 1f - 2f * inv
-                val offset = 255f * inv
-                combined.postConcat(
-                    ColorMatrix(
-                        floatArrayOf(
-                            scale, 0f, 0f, 0f, offset,
-                            0f, scale, 0f, 0f, offset,
-                            0f, 0f, scale, 0f, offset,
-                            0f, 0f, 0f, 1f, 0f
-                        )
-                    )
-                )
-                modified = true
-            }
-            filter.brightness?.takeIf { it != 1f }?.let { b ->
-                val br = b.coerceAtLeast(0f)
-                combined.postConcat(ColorMatrix().apply { setScale(br, br, br, 1f) })
-                modified = true
-            }
-        }
-
-        filter.contrast?.takeIf { it != 1f }?.let { c ->
-            val scale = c.coerceAtLeast(0f)
-            val translate = (-0.5f * scale + 0.5f) * 255f
-            combined.postConcat(
-                ColorMatrix(
-                    floatArrayOf(
-                        scale, 0f, 0f, 0f, translate,
-                        0f, scale, 0f, 0f, translate,
-                        0f, 0f, scale, 0f, translate,
-                        0f, 0f, 0f, 1f, 0f
-                    )
-                )
-            )
-            modified = true
-        }
-
-        return if (modified) combined else null
+        val matrix = JvmBackdropCapturePlanner.buildAndroidColorMatrix20(filter.copy(opacity = null))
+            ?: return null
+        return ColorMatrix(matrix)
     }
 
     override fun syncAndroidView() {

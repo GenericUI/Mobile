@@ -193,7 +193,7 @@ class AndroidTextInputImpl(
         if (prevSelStart in 0..textLen && prevSelEnd in 0..textLen) {
             runCatching { nextEditText.setSelection(prevSelStart, prevSelEnd) }
         }
-        if (prevFocus) {
+        if (prevFocus && isFocusable()) {
             runCatching { nextEditText.requestFocus() }
         }
         return nextEditText
@@ -268,6 +268,11 @@ class AndroidTextInputImpl(
 
     override fun setOnSubmit(listener: ((String) -> Unit)?) {
         onSubmitListener = listener
+    }
+
+    override fun setFocusable(focusable: Boolean) {
+        super<AndroidBaseNativeImpl>.setFocusable(focusable)
+        syncAndroidView()
     }
 
     override fun syncAndroidView() {
@@ -375,10 +380,11 @@ class AndroidTextInputImpl(
                 }
 
                 val editable = isEnabled() && !readOnlyState
+                val focusableEdit = editable && isFocusable()
                 editText.isEnabled = isEnabled()
-                editText.isFocusable = editable
-                editText.isFocusableInTouchMode = editable
-                editText.isCursorVisible = editable
+                editText.isFocusable = focusableEdit
+                editText.isFocusableInTouchMode = focusableEdit
+                editText.isCursorVisible = focusableEdit
             }
         }
     }

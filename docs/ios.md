@@ -28,9 +28,9 @@ When `styles { globalStyleSheet = "..." }` is set, startup attaches the precompi
 
 ---
 
-## 60+Hz Hardware `backdrop-filter` (`UikitBackdropBlurController`)
+## 60+Hz Hardware `backdrop-filter` (`AppleStyledSurfaceHelper` + `AppleBackdropFilterController` + `UikitBackdropBlurController`)
 
-- Implemented in [`UikitBackdropBlurController`](../src/iosMain/kotlin/com/nexustools/genericui/ios/UikitBackdropBlurController.kt) and shared by `IosStyledContainerImpl` (`StyledContainer`) and `IosStyledButtonImpl` (`StyledButton`) across both **`IOS`** and **`IPadOS`** (`TextBubble` strips `backdropFilter` via `withoutBackdropFilter()`).
+- Implemented via `:system`'s `StyledWidgetVisualController`, `:apple`'s shared [`AppleStyledSurfaceHelper`](../../apple/src/appleMain/kotlin/com/nexustools/genericui/apple/style/AppleStyledSurfaceHelper.kt) + [`AppleBackdropFilterController`](../../apple/src/appleMain/kotlin/com/nexustools/genericui/apple/style/AppleBackdropFilterController.kt), and [`UikitBackdropBlurController`](../src/iosMain/kotlin/com/nexustools/genericui/ios/UikitBackdropBlurController.kt), shared uniformly by all `IosStyledContainerImpl` (`StyledContainer`, plus `Composite` / `StyledSlider` / `SeekBar` with zero custom `SeekBarNativeImpl`), `IosStyledComponentImpl` (`StyledComponent`), and `IosStyledButtonImpl` (`StyledButton`) instances across both **`IOS`** and **`IPadOS`**.
 - Layers a hardware Metal-backed **`UIVisualEffectView`** (`CABackdropLayer`) using a paused `UIViewPropertyAnimator` (`fractionComplete`) for continuous CSS blur-radius interpolation plus a composited `tintOverlayView` for color/brightness/saturation adjustments while keeping `hostView.backgroundColor = UIColor.clearColor`.
 
 ---
@@ -44,9 +44,9 @@ When `styles { globalStyleSheet = "..." }` is set, startup attaches the precompi
 
 ## Native UIKit Control Rendering, Tinting, & Style Restraints
 
-1. **`BootstrapType.NONE` Default**: `IosBaseNativeImpl` renders 100% unmodified UIKit system controls (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UISegmentedControl`) matching the active `UITraitCollection` (`ThemeMode.AUTO`).
-2. **`BootstrapType != NONE`**: Tints controls via `UIButton.Configuration` / `tintColor` + `IosControlTintRenderUtil` using `ThemeConfig`, drawing contrasting labels on top.
-3. **Typography vs. Aesthetic Style Restraints**: Text elements honor typography/color; standard controls/containers ignore aesthetic CSS properties (tint via `BootstrapType` only); `StyledContainer` / `StyledButton` / `:extensions:ui:alien` honor full `ComponentStyle` chrome including `backdropFilter`.
+1. **`BootstrapType.NONE` Default & Non-`Button` Controls**: `IosBaseNativeImpl` renders 100% unmodified UIKit system controls (`UIButton`, `UITextField`, `UISwitch`, `UISlider`, `UISegmentedControl`) matching the active `UITraitCollection` (`ThemeMode.AUTO`). Among control components, **`DropdownButton`, `SplitDropdownButton`, `ProgressBar`, `Spinner`, `StyledSlider`, `Composite`, and ALL other non-`Button` controls MUST NOT support `BootstrapType`**.
+2. **`BootstrapType != NONE` on `Button` Subclasses**: Among controls, **ONLY `Button` and its subclasses (`Button`, `IconButton`, `ToggleButton`, `FloatingActionButton`, `StyledButton`)** support `BootstrapType` (plus Bootstrap-specific non-control semantic classes `Badge`, `Alert`, `Banner`, `Toast`, `Card`, `ListGroup`, `ListGroupItem`, `Jumbotron`, `Well` styled via `SemanticSurfaceStyleResolver` across all 9 backends). Tints `Button` subclasses via `UIButton.Configuration` / `tintColor` + `IosControlTintRenderUtil` using `ThemeConfig`, drawing contrasting labels on top; form subclasses mark `data-control-variant`.
+3. **Typography vs. Aesthetic Style Restraints**: Text elements honor typography/color; non-`Button` controls and standard containers ignore both `BootstrapType` and aesthetic CSS properties; Bootstrap non-control classes support `BootstrapType`; `StyledComponent` / `StyledContainer` / `StyledButton` / `Composite` (`StyledSlider`, `SeekBar`, `ExpandingVolumeSlider`) / `:extensions:ui:alien` honor full CSS/SCSS styling including `backdropFilter`, `SystemCssAnimationController` (`Animator`) `@keyframes`, proximal `position: relative` / `Window` containing-block parity, and consumer-compiled `GenericUiGeneratedThemeStyleSheet` (`Composite` and `StyledSlider` MUST NOT support `BootstrapType`; zero direct Kotlin component styling beyond runtime-dynamic `%` values).
 4. **Strict User CSS Class Isolation**: `styleSnapshot.customClasses` never mixes with `ComponentBootstrap` enums.
 
 ---

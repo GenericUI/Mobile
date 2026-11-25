@@ -3,7 +3,6 @@
 package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.feedback.ProgressBarNativeImpl
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIActivityIndicatorView
@@ -80,9 +79,7 @@ class IosProgressBarImpl : IosBaseNativeImpl(
     }
 
     override fun onBootstrapAppearanceChanged() {
-        val tint = UikitGeometryAndColorUtil.resolveBootstrapColor(getType())?.toUiColor()
-        progressView.progressTintColor = tint
-        tint?.let { activityIndicator.color = it }
+        progressView.progressTintColor = null
     }
 
     private fun syncActivityState() {

@@ -2,7 +2,6 @@
 
 package com.nexustools.genericui.ios
 
-import com.nexustools.genericui.ios.UikitGeometryAndColorUtil.toUiColor
 import com.nexustools.genericui.nativeimpl.form.RangeSliderNativeImpl
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIControlEventValueChanged
@@ -67,8 +66,7 @@ class IosRangeSliderImpl(
     }
 
     override fun onBootstrapAppearanceChanged() {
-        val color = UikitGeometryAndColorUtil.resolveBootstrapColor(getType())?.toUiColor()
-        slider.minimumTrackTintColor = color
+        slider.minimumTrackTintColor = null
     }
 
     private fun quantize(raw: Double): Double {
