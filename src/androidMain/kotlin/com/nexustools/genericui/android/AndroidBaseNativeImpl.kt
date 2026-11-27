@@ -111,6 +111,7 @@ open class AndroidBaseNativeImpl(
         this is AndroidStyledContainerImpl ||
             this is AndroidStyledComponentImpl ||
             this is AndroidStyledButtonImpl ||
+            this is AndroidStyledTextInputImpl ||
             AestheticStylePolicy.isExplicitlyStyledTagOrPrefix(componentTagName, componentClassPrefix) ||
             isCardComponent() ||
             isToastComponent() ||
@@ -120,7 +121,8 @@ open class AndroidBaseNativeImpl(
     protected open fun allowsBackdropBlur(): Boolean =
         this is AndroidStyledContainerImpl ||
             this is AndroidStyledComponentImpl ||
-            this is AndroidStyledButtonImpl
+            this is AndroidStyledButtonImpl ||
+            this is AndroidStyledTextInputImpl
 
     protected open fun allowsBootstrapButtonTinting(): Boolean =
         this is AndroidButtonImpl && this !is AndroidStyledButtonImpl
@@ -225,6 +227,7 @@ open class AndroidBaseNativeImpl(
     protected var preferredSizeValue: Size? = null
     private var focusableState: Boolean = true
     private var focusedState: Boolean = false
+    private var pendingFocusSync: Boolean = false
     private var hasSavedFocusableDefaults: Boolean = false
     private var savedFocusable: Boolean = false
     private var savedFocusableInTouchMode: Boolean = false
@@ -812,6 +815,12 @@ open class AndroidBaseNativeImpl(
                     }
                     if (!focusableState) {
                         applyFocusableStateToView(view, false)
+                    } else if (pendingFocusSync && focusedState && nativeWidget.enabled) {
+                        val target = resolveFocusTargetAndroidView()
+                        if (target != null && target.isFocusable) {
+                            pendingFocusSync = false
+                            applyAndroidFocusToTarget(target, true)
+                        }
                     }
 
                     if (onPointerDownListener != null ||
@@ -1268,9 +1277,40 @@ open class AndroidBaseNativeImpl(
         }
     }
 
+    protected open fun resolveFocusTargetAndroidView(): View? = nativeWidget.androidView
+
+    protected fun consumePendingFocusSync(): Boolean {
+        val pending = pendingFocusSync
+        pendingFocusSync = false
+        return pending
+    }
+
+    protected fun applyAndroidFocusToTarget(target: View, focused: Boolean) {
+        if (focused) {
+            if (!target.isFocusable) {
+                target.isFocusable = true
+            }
+            if (!target.hasFocus()) {
+                if (!target.requestFocus() && !target.isFocusableInTouchMode) {
+                    target.isFocusableInTouchMode = true
+                    target.requestFocus()
+                }
+            }
+        } else {
+            if (target.hasFocus()) {
+                target.clearFocus()
+            }
+            val host = nativeWidget.androidView
+            if (host != null && host !== target && host.hasFocus()) {
+                host.clearFocus()
+            }
+        }
+    }
+
     override fun setFocusable(focusable: Boolean) {
         focusableState = focusable
         if (!focusable) {
+            pendingFocusSync = false
             setFocusedState(false)
         }
         AndroidViewHandle.runOnMainThread {
@@ -1284,7 +1324,31 @@ open class AndroidBaseNativeImpl(
     override fun isFocusable(): Boolean = focusableState
 
     override fun setFocusedState(focused: Boolean) {
-        focusedState = if (!isEnabled() || !focusableState) false else focused
+        val coerced = if (!isEnabled() || !focusableState) false else focused
+        focusedState = coerced
+        if (!coerced) {
+            pendingFocusSync = false
+        }
+        val currentTarget = resolveFocusTargetAndroidView()
+        if (currentTarget == null) {
+            if (coerced) {
+                pendingFocusSync = true
+            }
+            return
+        }
+        AndroidViewHandle.runOnMainThread {
+            runCatching {
+                val target = resolveFocusTargetAndroidView()
+                if (target == null) {
+                    if (coerced) {
+                        pendingFocusSync = true
+                    }
+                    return@runCatching
+                }
+                pendingFocusSync = false
+                applyAndroidFocusToTarget(target, coerced)
+            }
+        }
     }
 
     override fun isFocusedState(): Boolean = if (!isEnabled() || !focusableState) false else focusedState

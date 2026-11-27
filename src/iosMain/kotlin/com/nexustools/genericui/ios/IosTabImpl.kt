@@ -6,7 +6,11 @@ import com.nexustools.genericui.component.tabs.TabIconPlacement
 import com.nexustools.genericui.core.NativeImpl
 import com.nexustools.genericui.enums.bootstrap.AlignItems
 import com.nexustools.genericui.enums.bootstrap.FlexDirection
+import com.nexustools.genericui.image.ImageDecodeOptions
+import com.nexustools.genericui.image.ImageLoader
+import com.nexustools.genericui.image.ImageSource
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
+import kotlinx.coroutines.Job
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIButton
 import platform.UIKit.UIButtonTypeSystem
@@ -14,8 +18,12 @@ import platform.UIKit.UIColor
 import platform.UIKit.UIControlEventTouchUpInside
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UIFont
+import platform.UIKit.UIImage
+import platform.UIKit.UIImageRenderingMode
 import platform.UIKit.UILabel
 import platform.UIKit.UITextField
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 /**
  * Native UIKit tab metadata and fallback header holder for [TabNativeImpl], consumed by
@@ -58,6 +66,12 @@ class IosTabImpl(
     private var tabId: String = ""
     private var tabTitle: String = ""
     private var tabIcon: String? = null
+    private var iconSizePxVal: Int = 20
+    private var iconPlacementVal: TabIconPlacement = TabIconPlacement.START
+    private var tintImageToThemeVal: Boolean = true
+    private var loadedBaseIconImage: UIImage? = null
+    private var activeIconLoadJob: Job? = null
+    private var iconLoadGeneration: Int = 0
     private var dirtyState: Boolean = false
     private var closableState: Boolean = closable
     private var pinnedState: Boolean = false
@@ -72,10 +86,22 @@ class IosTabImpl(
 
     internal fun currentTitle(): String = tabTitle
     internal fun currentIcon(): String? = tabIcon
+    internal fun currentIconSizePx(): Int = iconSizePxVal
+    internal fun isTintImageToTheme(): Boolean = tintImageToThemeVal
     internal fun isDirty(): Boolean = dirtyState
     internal fun isPinned(): Boolean = pinnedState
     internal fun isClosable(): Boolean = closableState
     internal fun currentBadgeText(): String? = badgeTextVal
+
+    internal fun resolvedTabUiImage(): UIImage? {
+        val base = loadedBaseIconImage ?: UikitGeometryAndColorUtil.systemIconImage(tabIcon) ?: return null
+        val mode = if (tintImageToThemeVal) {
+            UIImageRenderingMode.UIImageRenderingModeAlwaysTemplate
+        } else {
+            UIImageRenderingMode.UIImageRenderingModeAlwaysOriginal
+        }
+        return base.imageWithRenderingMode(mode)
+    }
 
     init {
         val host = uiView as UikitFlexContainerView
@@ -123,20 +149,87 @@ class IosTabImpl(
 
     override fun setIconNative(icon: String?) {
         tabIcon = icon
-        selectButton.setImage(UikitGeometryAndColorUtil.systemIconImage(icon), forState = UIControlStateNormal)
+        activeIconLoadJob?.cancel()
+        activeIconLoadJob = null
+        loadedBaseIconImage = null
+        val gen = ++iconLoadGeneration
+        val trimmed = icon?.trim().orEmpty()
+        if (trimmed.isEmpty()) {
+            applyResolvedSelectButtonIcon()
+            onTabUpdated?.invoke()
+            return
+        }
+        val sysImg = UikitGeometryAndColorUtil.systemIconImage(trimmed)
+        if (sysImg != null && !trimmed.contains("://") && !trimmed.contains("/") &&
+            !trimmed.startsWith("<svg", ignoreCase = true) && !trimmed.startsWith("data:", ignoreCase = true)
+        ) {
+            loadedBaseIconImage = sysImg
+            applyResolvedSelectButtonIcon()
+            onTabUpdated?.invoke()
+            return
+        }
+        if (trimmed.startsWith("memory://", ignoreCase = true)) {
+            ImageLoader.resolveMemoryBuffer(trimmed)?.let { buf ->
+                loadedBaseIconImage = UikitGeometryAndColorUtil.imageBufferToUiImage(buf)
+                applyResolvedSelectButtonIcon()
+                onTabUpdated?.invoke()
+                return
+            }
+        }
+        applyResolvedSelectButtonIcon()
         onTabUpdated?.invoke()
+        val px = iconSizePxVal.coerceIn(12, 32)
+        activeIconLoadJob = ImageLoader.launchLoad(
+            source = ImageSource.fromUrl(trimmed),
+            options = ImageDecodeOptions(targetWidth = px, targetHeight = px, antialiasing = true),
+            onLoaded = { buf ->
+                val img = UikitGeometryAndColorUtil.imageBufferToUiImage(buf) ?: return@launchLoad
+                dispatch_async(dispatch_get_main_queue()) {
+                    if (gen != iconLoadGeneration || isDisposed) return@dispatch_async
+                    loadedBaseIconImage = img
+                    applyResolvedSelectButtonIcon()
+                    onTabUpdated?.invoke()
+                }
+            },
+            onError = {}
+        )
     }
 
     override fun setIconSizePxNative(sizePx: Int) {
-        // Icon sizing tracked alongside segment layout
+        val next = sizePx.coerceAtLeast(1)
+        if (iconSizePxVal != next) {
+            iconSizePxVal = next
+            if (!tabIcon.isNullOrBlank()) {
+                setIconNative(tabIcon)
+                return
+            }
+        }
+        onTabUpdated?.invoke()
     }
 
     override fun setIconPlacementNative(placement: TabIconPlacement) {
-        // Icon placement tracked for segment configuration
+        iconPlacementVal = placement
+        onTabUpdated?.invoke()
     }
 
     override fun setTintImageToThemeNative(tintToTheme: Boolean) {
-        selectButton.tintColor = defaultSelectTintColor
+        tintImageToThemeVal = tintToTheme
+        applyResolvedSelectButtonIcon()
+        onTabUpdated?.invoke()
+    }
+
+    private fun applyResolvedSelectButtonIcon() {
+        if (tintImageToThemeVal) {
+            selectButton.tintColor = defaultSelectTintColor
+        }
+        selectButton.setImage(resolvedTabUiImage(), forState = UIControlStateNormal)
+    }
+
+    override fun dispose() {
+        activeIconLoadJob?.cancel()
+        activeIconLoadJob = null
+        loadedBaseIconImage = null
+        super.dispose()
     }
 
     override fun setTooltipNative(tooltip: String?) {

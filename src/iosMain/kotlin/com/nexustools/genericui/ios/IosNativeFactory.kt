@@ -41,6 +41,7 @@ import com.nexustools.genericui.nativeimpl.feedback.SpinnerNativeImpl
 import com.nexustools.genericui.nativeimpl.form.CheckboxNativeImpl
 import com.nexustools.genericui.nativeimpl.form.RangeSliderNativeImpl
 import com.nexustools.genericui.nativeimpl.form.SelectNativeImpl
+import com.nexustools.genericui.nativeimpl.form.StyledTextInputNativeImpl
 import com.nexustools.genericui.nativeimpl.form.TextInputNativeImpl
 import com.nexustools.genericui.nativeimpl.io.FileSystemNativeImpl
 import com.nexustools.genericui.nativeimpl.layout.ContainerNativeImpl
@@ -181,6 +182,14 @@ open class IosNativeFactory(
     override fun createDropdown(): DropdownNativeImpl<*> = IosDropdownImpl()
     override fun createTextInput(multiline: Boolean): TextInputNativeImpl<*> =
         IosTextInputImpl(initialMultiline = multiline)
+    override fun createStyledTextInput(
+        multiline: Boolean,
+        classPrefix: String
+    ): StyledTextInputNativeImpl<*> = IosStyledTextInputImpl(
+        multiline = multiline,
+        classPrefix = classPrefix,
+        layoutTarget = LayoutBackendTarget.fromBackendTarget(backendTarget)
+    )
     override fun createSelect(): SelectNativeImpl<*> = IosSelectImpl()
     override fun createCheckbox(switchStyle: Boolean, radioStyle: Boolean): CheckboxNativeImpl<*> =
         IosCheckboxImpl(switchStyle = switchStyle, radioStyle = radioStyle)

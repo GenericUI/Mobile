@@ -3,11 +3,11 @@ package com.nexustools.genericui.android
 import com.nexustools.genericui.component.composite.Composite
 import com.nexustools.genericui.component.feedback.Alert
 import com.nexustools.genericui.component.feedback.ProgressBar
-import com.nexustools.genericui.component.form.StyledSlider
+import com.nexustools.genericui.component.form.styled.StyledSlider
 import com.nexustools.genericui.component.layout.VStack
 import com.nexustools.genericui.component.shell.Window
 import com.nexustools.genericui.component.surface.Card
-import com.nexustools.genericui.component.surface.StyledComponent
+import com.nexustools.genericui.component.surface.styled.StyledComponent
 import com.nexustools.genericui.component.typography.Badge
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
@@ -297,6 +297,7 @@ class AndroidSystemThemeAndControlTintTest {
                 AndroidRangeSliderImpl(),
                 AndroidSelectImpl(),
                 AndroidTextInputImpl(),
+                AndroidStyledTextInputImpl(),
                 AndroidContainerImpl(),
                 AndroidStyledContainerImpl(),
                 AndroidStyledComponentImpl()

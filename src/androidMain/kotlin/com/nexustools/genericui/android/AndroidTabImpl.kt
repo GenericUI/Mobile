@@ -1,8 +1,11 @@
 package com.nexustools.genericui.android
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.TypedValue
@@ -22,7 +25,15 @@ import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.AppCompatImageView
 import com.nexustools.genericui.component.tabs.TabIconPlacement
 import com.nexustools.genericui.core.NativeImpl
+import com.nexustools.genericui.image.ImageBuffer
+import com.nexustools.genericui.image.ImageDecodeOptions
+import com.nexustools.genericui.image.ImageLoader
+import com.nexustools.genericui.image.ImageSource
+import com.nexustools.genericui.image.MonocolorImageRecolorProcessor
 import com.nexustools.genericui.nativeimpl.tabs.TabNativeImpl
+import com.nexustools.genericui.style.color.ImageTintMode
+import com.nexustools.genericui.style.color.RgbaColor
+import kotlinx.coroutines.Job
 
 /**
  * Android tab header view implementation of [TabNativeImpl], rendering icon, pin indicator,
@@ -76,6 +87,9 @@ class AndroidTabImpl(
     private var closeButtonView: AppCompatButton? = null
     private var customHeaderHost: FrameLayout? = null
     private var isEditingTitle: Boolean = false
+    private var activeIconLoadJob: Job? = null
+    private var loadedAsyncSpec: String? = null
+    private var loadedAsyncBuffer: ImageBuffer? = null
 
     init {
         nativeWidget.attributes["closable"] = initialClosable.toString()
@@ -418,9 +432,9 @@ class AndroidTabImpl(
                 if (iv != null) {
                     if (!icon.isNullOrBlank() && ctx != null) {
                         val tintArgb = if (tintImageToThemeVal) textColor else null
-                        val drawable = AndroidImageImpl.resolveDrawable(ctx, icon, tintArgb)
+                        val px = AndroidViewHandle.dpToPx(iconSizePxVal).coerceAtLeast(1)
+                        val drawable = resolveTabIconDrawableSync(ctx, icon, px, tintArgb, isDark)
                         if (drawable != null) {
-                            val px = AndroidViewHandle.dpToPx(iconSizePxVal).coerceAtLeast(1)
                             iv.layoutParams = LinearLayout.LayoutParams(px, px).apply {
                                 rightMargin = AndroidViewHandle.dpToPx(6)
                             }
@@ -428,6 +442,13 @@ class AndroidTabImpl(
                             iv.visibility = View.VISIBLE
                         } else {
                             iv.visibility = View.GONE
+                            launchAsyncIconLoad(ctx, icon, px, tintArgb, isDark) { loadedDrawable ->
+                                iv.layoutParams = LinearLayout.LayoutParams(px, px).apply {
+                                    rightMargin = AndroidViewHandle.dpToPx(6)
+                                }
+                                iv.setImageDrawable(loadedDrawable)
+                                iv.visibility = View.VISIBLE
+                            }
                         }
                     } else {
                         iv.visibility = View.GONE
@@ -456,5 +477,116 @@ class AndroidTabImpl(
                 }
             }
         }
+    }
+
+    internal fun resolveTabIconDrawableSync(
+        ctx: Context,
+        iconSpec: String,
+        targetPx: Int,
+        tintArgb: Int?,
+        isDark: Boolean
+    ): Drawable? {
+        AndroidImageImpl.resolveDrawable(ctx, iconSpec, tintArgb)?.let { d ->
+            d.setBounds(0, 0, targetPx, targetPx)
+            return d
+        }
+        val cached = if (loadedAsyncSpec == iconSpec.trim()) loadedAsyncBuffer else null
+        return cached?.let { bufferToDrawable(ctx, it, targetPx, tintArgb, isDark) }
+    }
+
+    internal fun launchAsyncIconLoad(
+        ctx: Context,
+        iconSpec: String,
+        targetPx: Int,
+        tintArgb: Int?,
+        isDark: Boolean,
+        onDrawableReady: (Drawable) -> Unit
+    ) {
+        val trimmed = iconSpec.trim()
+        if (trimmed.isEmpty()) return
+        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("https://", ignoreCase = true) &&
+            !trimmed.startsWith("data:", ignoreCase = true) &&
+            !trimmed.startsWith("memory://", ignoreCase = true) &&
+            !trimmed.startsWith("file:", ignoreCase = true) &&
+            !trimmed.startsWith("<svg", ignoreCase = true) &&
+            !trimmed.endsWith(".ico", ignoreCase = true) &&
+            !trimmed.endsWith(".png", ignoreCase = true) &&
+            !trimmed.endsWith(".webp", ignoreCase = true) &&
+            !trimmed.endsWith(".jpg", ignoreCase = true) &&
+            !trimmed.endsWith(".jpeg", ignoreCase = true)
+        ) {
+            return
+        }
+        if (ImageLoader.activeNativeCodec == null) {
+            ImageLoader.activeNativeCodec = AndroidBitmapImageCodecImpl(ctx)
+        }
+        activeIconLoadJob?.cancel()
+        loadedAsyncSpec = trimmed
+        loadedAsyncBuffer = null
+        activeIconLoadJob = ImageLoader.launchLoad(
+            source = ImageSource.fromUrl(trimmed),
+            options = ImageDecodeOptions(targetWidth = targetPx, targetHeight = targetPx, antialiasing = true),
+            onLoaded = { buf ->
+                if (loadedAsyncSpec != trimmed) return@launchLoad
+                loadedAsyncBuffer = buf
+                val d = bufferToDrawable(ctx, buf, targetPx, tintArgb, isDark) ?: return@launchLoad
+                AndroidViewHandle.runOnMainThread {
+                    if (loadedAsyncSpec == trimmed && iconVal?.trim() == trimmed) {
+                        onDrawableReady(d)
+                    }
+                }
+            },
+            onError = {}
+        )
+    }
+
+    private fun bufferToDrawable(
+        ctx: Context,
+        rawBuffer: ImageBuffer,
+        targetPx: Int,
+        tintArgb: Int?,
+        isDark: Boolean
+    ): Drawable? {
+        if (rawBuffer.width <= 0 || rawBuffer.height <= 0) return null
+        val size = targetPx.coerceAtLeast(1)
+        val scaled = if (rawBuffer.width != size || rawBuffer.height != size) {
+            ImageLoader.resize(rawBuffer, size, size, antialiasing = true)
+        } else {
+            rawBuffer
+        }
+        val finalBuf = if (tintArgb != null) {
+            val tintRgba = RgbaColor(
+                (tintArgb ushr 16) and 0xFF,
+                (tintArgb ushr 8) and 0xFF,
+                tintArgb and 0xFF,
+                ((tintArgb ushr 24) and 0xFF) / 255f
+            )
+            MonocolorImageRecolorProcessor.processImageBuffer(scaled, ImageTintMode.SRC_IN, tintRgba, isDark)
+        } else {
+            scaled.toRgba8888()
+        }
+        val rgba = finalBuf.toRgba8888()
+        val pixels = IntArray(rgba.width * rgba.height)
+        for (i in pixels.indices) {
+            val o = i * 4
+            val r = rgba.bytes[o].toInt() and 0xFF
+            val g = rgba.bytes[o + 1].toInt() and 0xFF
+            val b = rgba.bytes[o + 2].toInt() and 0xFF
+            val a = rgba.bytes[o + 3].toInt() and 0xFF
+            pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        val bmp = Bitmap.createBitmap(rgba.width, rgba.height, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(pixels, 0, rgba.width, 0, 0, rgba.width, rgba.height)
+        return BitmapDrawable(ctx.resources, bmp).mutate().apply {
+            setBounds(0, 0, size, size)
+        }
+    }
+
+    override fun dispose() {
+        activeIconLoadJob?.cancel()
+        activeIconLoadJob = null
+        loadedAsyncBuffer = null
+        super.dispose()
     }
 }

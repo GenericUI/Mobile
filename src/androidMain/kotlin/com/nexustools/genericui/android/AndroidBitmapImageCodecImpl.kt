@@ -22,6 +22,7 @@ import com.nexustools.genericui.image.PixelFormat
 import com.nexustools.genericui.jvm.JvmImageCodecBase
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -169,7 +170,120 @@ class AndroidBitmapImageCodecImpl(
             val buffer = bitmapToImageBuffer(finalBitmap, premultiplyOutput = options.premultiplyAlpha)
             if (!finalBitmap.isRecycled) finalBitmap.recycle()
             buffer
-        }.getOrNull()
+        }.getOrNull() ?: run {
+            if (isIcoHeader(bytes, detectedFormat)) decodeIcoFallback(bytes, options) else null
+        }
+    }
+
+    private fun isIcoHeader(bytes: ByteArray, format: ImageFormat?): Boolean {
+        if (format == ImageFormat.ICO) return true
+        if (bytes.size < 22) return false
+        val reserved = (bytes[0].toInt() and 0xFF) or ((bytes[1].toInt() and 0xFF) shl 8)
+        val type = (bytes[2].toInt() and 0xFF) or ((bytes[3].toInt() and 0xFF) shl 8)
+        val count = (bytes[4].toInt() and 0xFF) or ((bytes[5].toInt() and 0xFF) shl 8)
+        return reserved == 0 && (type == 1 || type == 2) && count in 1..128
+    }
+
+    private fun decodeIcoFallback(bytes: ByteArray, options: ImageDecodeOptions): ImageBuffer? {
+        if (bytes.size < 6) return null
+        fun u16(off: Int): Int = (bytes[off].toInt() and 0xFF) or ((bytes[off + 1].toInt() and 0xFF) shl 8)
+        fun i32(off: Int): Int = (bytes[off].toInt() and 0xFF) or ((bytes[off + 1].toInt() and 0xFF) shl 8) or
+            ((bytes[off + 2].toInt() and 0xFF) shl 16) or ((bytes[off + 3].toInt() and 0xFF) shl 24)
+        val count = u16(4).coerceAtMost(64)
+        var bestW = 0; var bestH = 0; var bestOff = -1; var bestSize = 0; var bestScore = Int.MAX_VALUE
+        val want = options.targetWidth ?: options.targetHeight
+        for (i in 0 until count) {
+            val dir = 6 + i * 16
+            if (dir + 16 > bytes.size) break
+            val w = (bytes[dir].toInt() and 0xFF).let { if (it == 0) 256 else it }
+            val h = (bytes[dir + 1].toInt() and 0xFF).let { if (it == 0) 256 else it }
+            val bpp = u16(dir + 6)
+            val sz = i32(dir + 8)
+            val off = i32(dir + 12)
+            if (sz <= 0 || off < 6 || off.toLong() + sz.toLong() > bytes.size.toLong()) continue
+            val score = if (want != null && want > 0) {
+                (abs(w - want) + abs(h - want)) * 1000 + (if (w >= want) 0 else 500) - bpp
+            } else {
+                -(w * h * 100 + bpp)
+            }
+            if (score < bestScore) {
+                bestScore = score; bestW = w; bestH = h; bestOff = off; bestSize = sz
+            }
+        }
+        if (bestOff < 0 || bestSize <= 0) return null
+        val slice = bytes.copyOfRange(bestOff, bestOff + bestSize)
+        if (slice.size >= 8 && (slice[0].toInt() and 0xFF) == 0x89 && slice[1] == 'P'.code.toByte()) {
+            return decodePlatform(slice, ImageFormat.PNG, options)
+        }
+        if (slice.size < 40) return null
+        fun dibI32(off: Int): Int = (slice[off].toInt() and 0xFF) or ((slice[off + 1].toInt() and 0xFF) shl 8) or
+            ((slice[off + 2].toInt() and 0xFF) shl 16) or ((slice[off + 3].toInt() and 0xFF) shl 24)
+        fun dibU16(off: Int): Int = (slice[off].toInt() and 0xFF) or ((slice[off + 1].toInt() and 0xFF) shl 8)
+        val headerSize = dibI32(0)
+        if (headerSize < 40 || headerSize > slice.size) return null
+        val width = dibI32(4).takeIf { it > 0 } ?: bestW
+        val rawH = dibI32(8)
+        val topDown = rawH < 0
+        val totalH = abs(rawH)
+        val height = if (totalH == bestH * 2 || totalH > bestH) (totalH / 2).coerceAtLeast(1) else bestH
+        val bpp = dibU16(14)
+        val clrUsed = dibI32(32)
+        val palCount = if (bpp <= 8) (if (clrUsed > 0) clrUsed else (1 shl bpp)) else 0
+        val xorOffset = headerSize + palCount * 4
+        if (xorOffset >= slice.size) return null
+        val xorStride = ((width * bpp + 31) / 32) * 4
+        val andOffset = xorOffset + xorStride * height
+        val andStride = ((width + 31) / 32) * 4
+        val out = ImageBuffer(width, height, PixelFormat.RGBA_8888, ImageColorSpace.SRGB)
+        var max32Alpha = 0
+        for (row in 0 until height) {
+            val y = if (topDown) row else (height - 1 - row)
+            val xorRow = xorOffset + row * xorStride
+            for (x in 0 until width) {
+                var r = 0; var g = 0; var b = 0; var a = 255
+                when (bpp) {
+                    32 -> {
+                        val p = xorRow + x * 4
+                        if (p + 3 < slice.size) {
+                            b = slice[p].toInt() and 0xFF; g = slice[p + 1].toInt() and 0xFF
+                            r = slice[p + 2].toInt() and 0xFF; a = slice[p + 3].toInt() and 0xFF
+                            if (a > max32Alpha) max32Alpha = a
+                        }
+                    }
+                    24 -> {
+                        val p = xorRow + x * 3
+                        if (p + 2 < slice.size) {
+                            b = slice[p].toInt() and 0xFF; g = slice[p + 1].toInt() and 0xFF; r = slice[p + 2].toInt() and 0xFF
+                        }
+                    }
+                    8, 4, 1 -> {
+                        val palIdx = when (bpp) {
+                            8 -> { val p = xorRow + x; if (p < slice.size) (slice[p].toInt() and 0xFF) else 0 }
+                            4 -> { val p = xorRow + (x ushr 1); val v = if (p < slice.size) (slice[p].toInt() and 0xFF) else 0; if ((x and 1) == 0) (v ushr 4) else (v and 0x0F) }
+                            else -> { val p = xorRow + (x ushr 3); val v = if (p < slice.size) (slice[p].toInt() and 0xFF) else 0; (v ushr (7 - (x and 7))) and 1 }
+                        }
+                        val cOff = headerSize + palIdx * 4
+                        if (cOff + 2 < slice.size) {
+                            b = slice[cOff].toInt() and 0xFF; g = slice[cOff + 1].toInt() and 0xFF; r = slice[cOff + 2].toInt() and 0xFF
+                        }
+                    }
+                    else -> return null
+                }
+                out.setPixel(x, y, com.nexustools.genericui.style.color.RgbaColor(r, g, b, a / 255f))
+            }
+        }
+        if ((bpp < 32 || max32Alpha == 0) && andOffset + andStride * height <= slice.size) {
+            for (row in 0 until height) {
+                val y = if (topDown) row else (height - 1 - row)
+                val andRow = andOffset + row * andStride
+                for (x in 0 until width) {
+                    val bit = ((slice[andRow + (x ushr 3)].toInt() and 0xFF) ushr (7 - (x and 7))) and 1
+                    val cur = out.getPixel(x, y)
+                    out.setPixel(x, y, com.nexustools.genericui.style.color.RgbaColor(cur.r, cur.g, cur.b, if (bit == 1) 0f else 1f))
+                }
+            }
+        }
+        return out
     }
 
     override fun decodeAnimatedPlatform(source: ImageSource, options: ImageDecodeOptions): AnimatedImage? {

@@ -254,9 +254,13 @@ class AndroidStyledComponentImpl(
 
     override fun setFocusedState(focused: Boolean) {
         val coerced = if (!isEnabled() || !isFocusable()) false else focused
+        val visualsChanged = this.focused != coerced || nativeWidget.attributes["focused"] != coerced.toString()
         this.focused = coerced
         nativeWidget.attributes["focused"] = coerced.toString()
-        syncCurrentVisuals()
+        super<AndroidBaseNativeImpl>.setFocusedState(coerced)
+        if (visualsChanged) {
+            syncCurrentVisuals()
+        }
     }
 
     override fun isFocusedState(): Boolean = if (!isEnabled() || !isFocusable()) false else focused
@@ -279,6 +283,7 @@ class AndroidStyledComponentImpl(
             nativeWidget.attributes["hovered"] = "false"
             nativeWidget.attributes["focused"] = "false"
             nativeWidget.attributes["activePressed"] = "false"
+            super<AndroidBaseNativeImpl>.setFocusedState(false)
         }
         syncCurrentVisuals()
     }

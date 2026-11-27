@@ -237,7 +237,7 @@ class IosTabContainerImpl : IosBaseContainerNativeImpl(
                         append(" (").append(badge).append(')')
                     }
                 }
-                val iconImage = UikitGeometryAndColorUtil.systemIconImage(tab?.currentIcon())
+                val iconImage = tab?.resolvedTabUiImage()
                 if (displayTitle.isEmpty() && iconImage != null) {
                     segmentedControl.insertSegmentWithImage(iconImage, atIndex = idx.toULong(), animated = false)
                 } else {

@@ -23,8 +23,9 @@ import platform.UIKit.separatorColor
  * Native UIKit `UITextField` / `UITextView` implementation of [TextInputNativeImpl] with optional
  * floating/header `UILabel` caption (`TextField.label` parity from commit `398102f`).
  */
-class IosTextInputImpl(
-    initialMultiline: Boolean = false
+open class IosTextInputImpl(
+    initialMultiline: Boolean = false,
+    classPrefix: String = "text-input"
 ) : IosBaseNativeImpl(
     nativeWidget = UikitViewHandle(
         UikitFlexContainerView(CGRectMake(0.0, 0.0, 240.0, if (initialMultiline) 104.0 else 44.0)).apply {
@@ -32,11 +33,11 @@ class IosTextInputImpl(
             itemGapPt = 4.0
         }
     ),
-    componentClassPrefix = "text-input"
+    componentClassPrefix = classPrefix
 ), TextInputNativeImpl<UikitViewHandle> {
 
-    private val delegateBridge = UikitTextInputDelegate()
-    private val hostContainer: UikitFlexContainerView get() = uiView as UikitFlexContainerView
+    protected val delegateBridge = UikitTextInputDelegate()
+    protected val hostContainer: UikitFlexContainerView get() = uiView as UikitFlexContainerView
 
     val textField: UITextField = UITextField(frame = CGRectMake(0.0, 0.0, 240.0, 40.0)).apply {
         borderStyle = UITextBorderStyle.UITextBorderStyleRoundedRect
@@ -49,14 +50,14 @@ class IosTextInputImpl(
         layer.borderColor = UIColor.separatorColor.CGColor
     }
     var captionLabel: UILabel? = null
-        private set
+        protected set
 
-    private var currentValue: String = ""
-    private var placeholderValue: String = ""
-    private var labelValue: String? = null
-    private var readOnlyMode: Boolean = false
-    private var passwordMode: Boolean = false
-    private var multilineMode: Boolean = initialMultiline
+    protected var currentValue: String = ""
+    protected var placeholderValue: String = ""
+    protected var labelValue: String? = null
+    protected var readOnlyMode: Boolean = false
+    protected var passwordMode: Boolean = false
+    protected var multilineMode: Boolean = initialMultiline
     private var onValueChangedListener: ((String) -> Unit)? = null
     private var onSubmitListener: ((String) -> Unit)? = null
 
@@ -94,6 +95,13 @@ class IosTextInputImpl(
         delegateBridge.onSubmit = { text ->
             currentValue = text
             onSubmitListener?.invoke(text)
+        }
+        delegateBridge.onFocusChanged = { hasFocus ->
+            if (!hasFocus || (isEnabled() && isFocusable() && !readOnlyMode)) {
+                if (isFocusedState() != hasFocus) {
+                    setFocusedState(hasFocus)
+                }
+            }
         }
         rebuildInputSubviews()
     }
@@ -174,6 +182,9 @@ class IosTextInputImpl(
         textView.setEditable(enabled && !readOnlyMode)
     }
 
+    override fun resolveFocusTargetUiView(): platform.UIKit.UIView =
+        if (multilineMode) textView else textField
+
     override fun setFocusable(focusable: Boolean) {
         UikitFocusRegistry.setFocusable(textField, focusable)
         UikitFocusRegistry.setFocusable(textView, focusable)
@@ -186,7 +197,7 @@ class IosTextInputImpl(
         super.dispose()
     }
 
-    private fun rebuildInputSubviews() {
+    protected open fun rebuildInputSubviews() {
         for (sub in hostContainer.subviews.filterIsInstance<platform.UIKit.UIView>()) {
             sub.removeFromSuperview()
         }

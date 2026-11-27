@@ -520,14 +520,23 @@ open class IosBaseNativeImpl(
 
     override fun isEnabled(): Boolean = enabledState
 
+    protected open fun resolveFocusTargetUiView(): UIView = uiView
+
     override fun setFocusable(focusable: Boolean) {
         focusableState = focusable
+        val target = resolveFocusTargetUiView()
         UikitFocusRegistry.setFocusable(uiView, focusable)
+        if (target !== uiView) {
+            UikitFocusRegistry.setFocusable(target, focusable)
+        }
         if (!focusable) {
             setFocusedState(false)
             runOnMainThread {
                 if (isDisposed) return@runOnMainThread
                 uiView.endEditing(true)
+                if (target.isFirstResponder) {
+                    target.resignFirstResponder()
+                }
                 if (uiView.isFirstResponder) {
                     uiView.resignFirstResponder()
                 }
@@ -817,10 +826,13 @@ open class IosBaseNativeImpl(
     override fun setFocusedState(focused: Boolean) {
         val coerced = if (!enabledState || !focusableState) false else focused
         this.focused = coerced
+        val target = resolveFocusTargetUiView()
         if (coerced) {
-            uiView.becomeFirstResponder()
-        } else if (uiView.isFirstResponder) {
-            uiView.resignFirstResponder()
+            if (!target.isFirstResponder) {
+                target.becomeFirstResponder()
+            }
+        } else if (target.isFirstResponder) {
+            target.resignFirstResponder()
         }
     }
 
@@ -1148,13 +1160,22 @@ open class IosBaseNativeImpl(
 
     override fun setOnClick(listener: (() -> Unit)?) {
         actionTarget.onClick = listener
-        if (listener != null && tapRecognizer == null && uiView !is UIControl) {
-            val tap = UITapGestureRecognizer(target = actionTarget, action = UikitControlActionTarget.SEL_SINGLE_TAP)
-            tap.numberOfTapsRequired = 1uL
-            uiView.addGestureRecognizer(tap)
-            tapRecognizer = tap
-        } else if (uiView is UIControl) {
-            actionTarget.onPrimaryAction = listener
+        if (uiView !is UIControl) {
+            if (listener != null && tapRecognizer == null) {
+                val tap = UITapGestureRecognizer(target = actionTarget, action = UikitControlActionTarget.SEL_SINGLE_TAP)
+                tap.numberOfTapsRequired = 1uL
+                uiView.addGestureRecognizer(tap)
+                tapRecognizer = tap
+            } else if (listener == null && tapRecognizer != null) {
+                uiView.removeGestureRecognizer(tapRecognizer!!)
+                tapRecognizer = null
+            }
+            syncUserInteractionEnabled()
+        } else {
+            if (this !is IosCheckboxImpl) {
+                actionTarget.onPrimaryAction = listener
+            }
+            syncUserInteractionEnabled()
         }
     }
 

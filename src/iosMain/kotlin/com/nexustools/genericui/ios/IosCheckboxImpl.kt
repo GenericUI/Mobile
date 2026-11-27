@@ -95,6 +95,15 @@ class IosCheckboxImpl(
 
     override fun isChecked(): Boolean = checkedState
 
+    override fun resolveFocusTargetUiView(): platform.UIKit.UIView =
+        switchControl ?: toggleButton ?: uiView
+
+    override fun setFocusable(focusable: Boolean) {
+        switchControl?.let { UikitFocusRegistry.setFocusable(it, focusable) }
+        toggleButton?.let { UikitFocusRegistry.setFocusable(it, focusable) }
+        super<IosBaseNativeImpl>.setFocusable(focusable)
+    }
+
     override fun setOnCheckedChanged(listener: ((Boolean) -> Unit)?) {
         this.listener = listener
     }

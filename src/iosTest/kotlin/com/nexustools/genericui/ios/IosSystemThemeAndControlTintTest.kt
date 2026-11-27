@@ -3,11 +3,16 @@
 package com.nexustools.genericui.ios
 
 import com.nexustools.genericui.component.composite.Composite
-import com.nexustools.genericui.component.form.StyledSlider
+import com.nexustools.genericui.component.form.CheckBox
+import com.nexustools.genericui.component.form.TextField
+import com.nexustools.genericui.component.form.styled.StyledSlider
+import com.nexustools.genericui.component.form.styled.StyledTextArea
+import com.nexustools.genericui.component.form.styled.StyledTextField
 import com.nexustools.genericui.component.layout.Column
 import com.nexustools.genericui.component.shell.Window
-import com.nexustools.genericui.component.surface.StyledComponent
+import com.nexustools.genericui.component.surface.styled.StyledComponent
 import com.nexustools.genericui.component.tabs.TabPosition
+import com.nexustools.genericui.component.typography.Label
 import com.nexustools.genericui.core.GenericUI
 import com.nexustools.genericui.core.GenericUiAppDescriptor
 import com.nexustools.genericui.enums.bootstrap.BorderRadiusStyle
@@ -17,7 +22,9 @@ import com.nexustools.genericui.enums.bootstrap.BootstrapType
 import com.nexustools.genericui.enums.bootstrap.FontWeight
 import com.nexustools.genericui.enums.bootstrap.TextAlignment
 import com.nexustools.genericui.enums.bootstrap.TextTransform
+import com.nexustools.genericui.enums.css.CssBorderStyle
 import com.nexustools.genericui.enums.css.CssFontStyle
+import com.nexustools.genericui.enums.css.CssGenericFontFamily
 import com.nexustools.genericui.enums.css.CssPosition
 import com.nexustools.genericui.enums.css.CssTextDecoration
 import com.nexustools.genericui.geometry.EdgeInsets
@@ -30,6 +37,8 @@ import com.nexustools.genericui.style.css.CssEdgeLengths
 import com.nexustools.genericui.style.css.CssFontFamily
 import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.css.StyledVisualSpec
+import com.nexustools.genericui.style.gradient.Gradient.GradientStop
+import com.nexustools.genericui.style.gradient.Gradient.LinearGradient
 import com.nexustools.genericui.style.theme.ThemeColorSet
 import com.nexustools.genericui.style.theme.ThemeConfig
 import kotlinx.cinterop.DoubleVar
@@ -47,6 +56,8 @@ import platform.UIKit.UIButtonConfigurationSize
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UILabel
 import platform.UIKit.UISegmentedControl
+import platform.UIKit.UITapGestureRecognizer
+import platform.UIKit.UITextBorderStyle
 import platform.UIKit.UIView
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -380,6 +391,7 @@ class IosSystemThemeAndControlTintTest {
                 IosContainerImpl(),
                 IosStyledContainerImpl(),
                 IosStyledComponentImpl(),
+                IosStyledTextInputImpl(),
                 IosTextImpl()
             )
             for (ctrl in untinted) {
@@ -511,5 +523,139 @@ class IosSystemThemeAndControlTintTest {
             assertEquals(-50.0, tx, 0.01)
         }
         win.dispose()
+    }
+
+    @Test
+    fun iosStyledTextFieldAndTextAreaSupportVisualSpecsPillGradientStatesAndIgnoreBootstrapType() {
+        com.nexustools.genericui.component.shell.Application.current?.dispose()
+        val prevFactory = GenericUI.activeFactory
+        val factory = IosNativeFactory()
+        GenericUI.initialize(factory)
+
+        try {
+            val gradient = LinearGradient(
+                angleDegrees = 90f,
+                stops = listOf(
+                    GradientStop(RgbaColor(20, 32, 60, 235), 0f),
+                    GradientStop(RgbaColor(55, 85, 145, 235), 1f)
+                )
+            )
+            val styledField = StyledTextField(placeholder = "Search...").apply {
+                type = BootstrapType.DANGER
+                setBackground(gradient)
+                setBorder(widthPx = 2f, color = RgbaColor(90, 175, 255, 255), style = CssBorderStyle.SOLID)
+                setPill(true)
+                textColor = RgbaColor(245, 248, 255, 255)
+                placeholderColor = RgbaColor(155, 180, 215, 255)
+                setFont(family = CssFontFamily.generic(CssGenericFontFamily.MONOSPACE), sizePx = 16f, weight = FontWeight.BOLD)
+                setPadding(EdgeInsets(top = 6, right = 14, bottom = 6, left = 14))
+                setHoverStyle(backgroundColor = RgbaColor(35, 55, 95, 255))
+                setFocusStyle(
+                    borderColor = RgbaColor(255, 200, 90, 255),
+                    focusRingColor = RgbaColor(255, 200, 90, 255),
+                    focusRingWidthPx = 2f
+                )
+                disabledBackgroundColor = RgbaColor(64, 68, 78, 255)
+            }
+            val styledArea = StyledTextArea(placeholder = "Bio...").apply {
+                backgroundColor = RgbaColor(24, 28, 36, 255)
+                placeholderColor = RgbaColor(140, 150, 170, 255)
+            }
+
+            val host = Column().apply {
+                addChild(styledField)
+                addChild(styledArea)
+            }
+            val win = Window("iOS StyledTextField").apply { setContent(host) }
+            win.show(factory)
+
+            val fieldImpl = styledField.nativeImpl as? IosStyledTextInputImpl
+            val areaImpl = styledArea.nativeImpl as? IosStyledTextInputImpl
+            assertNotNull(fieldImpl)
+            assertNotNull(areaImpl)
+            assertEquals(UITextBorderStyle.UITextBorderStyleNone, fieldImpl.textField.borderStyle)
+            assertNotNull(fieldImpl.textField.attributedPlaceholder)
+            assertTrue(fieldImpl.nativeWidget.uiView.layer.cornerRadius > 0.0)
+            assertNull(fieldImpl.resolveCurrentVisuals().backgroundColor) // base uses gradient, BootstrapType.DANGER ignored
+            assertNotNull(fieldImpl.resolveCurrentVisuals().backgroundGradient)
+
+            fieldImpl.setHoveredState(true)
+            assertEquals(RgbaColor(35, 55, 95, 255), fieldImpl.resolveCurrentVisuals().backgroundColor)
+            fieldImpl.setHoveredState(false)
+
+            fieldImpl.setFocusedState(true)
+            assertEquals(RgbaColor(255, 200, 90, 255), fieldImpl.resolveCurrentVisuals().borderColor)
+            assertEquals(RgbaColor(255, 200, 90, 255), fieldImpl.resolveCurrentVisuals().focusRingColor)
+
+            styledField.isEnabled = false
+            assertEquals(RgbaColor(64, 68, 78, 255), fieldImpl.resolveCurrentVisuals().backgroundColor)
+
+            assertNotNull(areaImpl.nativeWidget.uiView.backgroundColor)
+            win.dispose()
+        } finally {
+            com.nexustools.genericui.component.shell.Application.current?.dispose()
+            if (prevFactory != null) GenericUI.initialize(prevFactory) else GenericUI.activeFactory = null
+        }
+    }
+
+    @Test
+    fun iosLabelTargetWiresTapGestureRecognizerAndDelegatesFocus() {
+        com.nexustools.genericui.component.shell.Application.current?.dispose()
+        val prevFactory = GenericUI.activeFactory
+        val factory = IosNativeFactory()
+        GenericUI.initialize(factory)
+
+        try {
+            val styledField = StyledTextField(placeholder = "Email")
+            val plainField = TextField(placeholder = "Notes")
+            val checkBox = CheckBox("Subscribe")
+
+            val styledLabel = Label("Email", target = styledField)
+            val plainLabel = Label("Notes", target = plainField)
+            val cbLabel = Label("Subscribe", target = checkBox)
+
+            val host = Column().apply {
+                addChild(styledLabel)
+                addChild(styledField)
+                addChild(plainLabel)
+                addChild(plainField)
+                addChild(cbLabel)
+                addChild(checkBox)
+            }
+            val win = Window("iOS Label Target").apply { setContent(host) }
+            win.show(factory)
+
+            val styledLabelImpl = styledLabel.nativeImpl as IosTextImpl
+            val cbLabelImpl = cbLabel.nativeImpl as IosTextImpl
+
+            assertTrue(styledLabelImpl.label.userInteractionEnabled)
+            assertTrue(cbLabelImpl.label.userInteractionEnabled)
+            assertTrue(styledLabelImpl.label.gestureRecognizers.orEmpty().any { it is UITapGestureRecognizer })
+            assertTrue(cbLabelImpl.label.gestureRecognizers.orEmpty().any { it is UITapGestureRecognizer })
+            assertNull(styledLabel.getAttribute("for"))
+
+            styledLabel.triggerClick()
+            assertTrue(styledField.isFocused)
+            assertTrue((styledField.nativeImpl as IosStyledTextInputImpl).isFocusedState())
+
+            plainLabel.triggerClick()
+            assertTrue(plainField.isFocused)
+            assertTrue((plainField.nativeImpl as IosTextInputImpl).isFocusedState())
+
+            cbLabel.triggerClick()
+            assertTrue(checkBox.isFocused)
+            assertTrue((checkBox.nativeImpl as IosCheckboxImpl).isFocusedState())
+
+            styledField.isFocused = false
+            styledLabel.target = null
+            assertTrue(styledLabelImpl.label.gestureRecognizers.orEmpty().none { it is UITapGestureRecognizer })
+            styledLabel.triggerClick()
+            assertFalse(styledField.isFocused)
+
+            win.dispose()
+        } finally {
+            com.nexustools.genericui.component.shell.Application.current?.dispose()
+            if (prevFactory != null) GenericUI.initialize(prevFactory) else GenericUI.activeFactory = null
+        }
     }
 }

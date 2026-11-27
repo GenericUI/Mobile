@@ -408,6 +408,7 @@ class AndroidPreferenceStoreImpl(
                 else -> element.asDouble().toString() to KIND_DOUBLE
             }
             PreferenceElementKind.STRING -> (element.stringValue ?: "") to KIND_STRING
+            PreferenceElementKind.BYTES -> java.util.Base64.getEncoder().encodeToString(element.bytesOrNull() ?: ByteArray(0)) to KIND_BYTES
             PreferenceElementKind.ARRAY,
             PreferenceElementKind.MAP,
             PreferenceElementKind.OBJECT -> PreferenceObjectCodec.elementToJson(element) to KIND_JSON
@@ -467,6 +468,9 @@ class AndroidPreferenceStoreImpl(
                 KIND_DOUBLE -> raw.toDoubleOrNull()?.let { PreferenceElement.ofDouble(it) }
                     ?: decodeUnmarkedString(raw)
                 KIND_STRING -> PreferenceElement.ofString(raw)
+                KIND_BYTES -> PreferenceElement.ofBytes(
+                    runCatching { java.util.Base64.getDecoder().decode(raw) }.getOrElse { ByteArray(0) }
+                )
                 KIND_JSON -> runCatching { PreferenceObjectCodec.fromJsonElement(raw) }
                     .getOrElse { PreferenceElement.ofString(raw) }
                 else -> decodeUnmarkedString(raw)
@@ -500,6 +504,7 @@ class AndroidPreferenceStoreImpl(
         private const val META_PREFS_SUFFIX: String = "_genericui_kinds"
         private const val KIND_DOUBLE: String = "D"
         private const val KIND_STRING: String = "S"
+        private const val KIND_BYTES: String = "B"
         private const val KIND_JSON: String = "J"
         private const val LEGACY_BSON_ROOT_DIR: String = "genericui-prefs"
         private const val LEGACY_BSON_EXT: String = ".bson"

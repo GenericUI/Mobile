@@ -84,6 +84,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
             tabMode = TabLayout.MODE_SCROLLABLE
             tabGravity = TabLayout.GRAVITY_START
             isInlineLabel = true
+            tabIconTint = null
             addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
                 override fun onTabSelected(tab: TabLayout.Tab) {
                     if (suppressTabSelectionCallback) return
@@ -371,13 +372,11 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
                         }
                         val iconSrc = androidTab?.iconVal?.takeIf { it.isNotBlank() }
                         val iconSizeDp = androidTab?.iconSizePxVal ?: 20
+                        val iconPx = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
                         val tintToTheme = androidTab?.tintImageToThemeVal ?: true
                         val iconTintArgb = if (tintToTheme) labelFallbackColor else null
-                        val resolvedDrawable = if (iconSrc != null) {
-                            AndroidImageImpl.resolveDrawable(ctx, iconSrc, iconTintArgb)?.also { d ->
-                                val px = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
-                                d.setBounds(0, 0, px, px)
-                            }
+                        val resolvedDrawable = if (iconSrc != null && androidTab != null) {
+                            androidTab.resolveTabIconDrawableSync(ctx, iconSrc, iconPx, iconTintArgb, isDark)
                         } else {
                             null
                         }
@@ -391,6 +390,7 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
                             )
 
                         if (needsCustomView && androidTab != null) {
+                            var customIconView: AppCompatImageView? = null
                             tab.customView = buildInteractiveTabCustomView(
                                 ctx = ctx,
                                 index = i,
@@ -400,10 +400,23 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
                                 isSelected = i == selectedIndexVal,
                                 labelColor = labelFallbackColor,
                                 resolvedDrawable = resolvedDrawable,
-                                iconSizeDp = iconSizeDp
+                                iconSizeDp = iconSizeDp,
+                                onIconImageViewCreated = { iv -> customIconView = iv }
                             )
+                            if (resolvedDrawable == null && iconSrc != null) {
+                                androidTab.launchAsyncIconLoad(ctx, iconSrc, iconPx, iconTintArgb, isDark) { loaded ->
+                                    customIconView?.let { iv ->
+                                        iv.setImageDrawable(loaded)
+                                        iv.visibility = View.VISIBLE
+                                    }
+                                }
+                            }
                         } else if (resolvedDrawable != null) {
                             tab.icon = resolvedDrawable
+                        } else if (iconSrc != null && androidTab != null) {
+                            androidTab.launchAsyncIconLoad(ctx, iconSrc, iconPx, iconTintArgb, isDark) { loaded ->
+                                tab.icon = loaded
+                            }
                         }
 
                         val bText = androidTab?.badgeTextVal
@@ -442,7 +455,8 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
         isSelected: Boolean,
         labelColor: Int,
         resolvedDrawable: android.graphics.drawable.Drawable?,
-        iconSizeDp: Int
+        iconSizeDp: Int,
+        onIconImageViewCreated: (AppCompatImageView) -> Unit = {}
     ): View {
         val customHeaderView = androidTab.customHeaderImpl?.let { headerImpl ->
             (headerImpl.nativeWidget as? AndroidViewHandle)?.androidView
@@ -465,13 +479,20 @@ class AndroidTabContainerImpl : AndroidBaseContainerNativeImpl("com.google.andro
             return row
         }
 
-        if (resolvedDrawable != null) {
+        if (!androidTab.iconVal.isNullOrBlank()) {
             val iconPx = AndroidViewHandle.dpToPx(iconSizeDp).coerceAtLeast(14)
-            row.addView(
-                AppCompatImageView(ctx).apply {
-                    scaleType = ImageView.ScaleType.FIT_CENTER
+            val iv = AppCompatImageView(ctx).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                if (resolvedDrawable != null) {
                     setImageDrawable(resolvedDrawable)
-                },
+                    visibility = View.VISIBLE
+                } else {
+                    visibility = View.GONE
+                }
+            }
+            onIconImageViewCreated(iv)
+            row.addView(
+                iv,
                 LinearLayout.LayoutParams(iconPx, iconPx).apply {
                     rightMargin = AndroidViewHandle.dpToPx(6)
                 }

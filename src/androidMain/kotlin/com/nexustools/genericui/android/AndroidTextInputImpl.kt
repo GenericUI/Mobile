@@ -31,23 +31,25 @@ import com.nexustools.genericui.style.color.BootstrapColorPalette
  * [AppCompatEditText] when [getLabel] is `null`/blank and a Material outlined [TextInputLayout]
  * + [TextInputEditText] when a floating [label] is set.
  */
-class AndroidTextInputImpl(
-    val multiline: Boolean = false
-) : AndroidBaseNativeImpl("com.google.android.material.textfield.TextInputEditText", "form-control"), TextInputNativeImpl<AndroidViewHandle> {
-    private var labelText: String? = null
-    private var readOnlyState: Boolean = false
-    private var passwordState: Boolean = false
-    private var multilineState: Boolean = multiline
-    private var onValueChangedListener: ((String) -> Unit)? = null
-    private var onSubmitListener: ((String) -> Unit)? = null
-    private var suppressTextWatcher: Boolean = false
+open class AndroidTextInputImpl(
+    val multiline: Boolean = false,
+    classPrefix: String = "form-control"
+) : AndroidBaseNativeImpl("com.google.android.material.textfield.TextInputEditText", classPrefix), TextInputNativeImpl<AndroidViewHandle> {
+    protected var labelText: String? = null
+    protected var readOnlyState: Boolean = false
+    protected var passwordState: Boolean = false
+    protected var multilineState: Boolean = multiline
+    protected var onValueChangedListener: ((String) -> Unit)? = null
+    protected var onSubmitListener: ((String) -> Unit)? = null
+    protected var suppressTextWatcher: Boolean = false
+    private var suppressFocusListener: Boolean = false
 
-    private var bareEditText: AppCompatEditText? = null
-    private var textInputLayout: TextInputLayout? = null
-    private var labeledEditText: TextInputEditText? = null
-    private var activeEditText: EditText? = null
-    private var isShowingLabeledMode: Boolean = false
-    private var initialized: Boolean = false
+    protected var bareEditText: AppCompatEditText? = null
+    protected var textInputLayout: TextInputLayout? = null
+    protected var labeledEditText: TextInputEditText? = null
+    protected var activeEditText: EditText? = null
+    protected var isShowingLabeledMode: Boolean = false
+    protected var initialized: Boolean = false
 
     init {
         initialized = true
@@ -100,7 +102,22 @@ class AndroidTextInputImpl(
                 false
             }
         }
+        editText.setOnFocusChangeListener { _, hasFocus ->
+            if (suppressFocusListener || activeEditText !== editText) return@setOnFocusChangeListener
+            if (!hasFocus || (isEnabled() && isFocusable() && !readOnlyState)) {
+                if (isFocusedState() != hasFocus) {
+                    setFocusedState(hasFocus)
+                }
+            }
+        }
+        onEditTextCreated(editText)
     }
+
+    protected open fun createHostContainerView(context: Context): FrameLayout = FrameLayout(context)
+
+    protected open fun onEditTextCreated(editText: EditText) = Unit
+
+    override fun resolveFocusTargetAndroidView(): View? = activeEditText
 
     private fun obtainBareEditText(context: Context): AppCompatEditText =
         bareEditText ?: AppCompatEditText(context).also { edit ->
@@ -114,46 +131,61 @@ class AndroidTextInputImpl(
             return existing
         }
 
-        val prevFocus = existing?.hasFocus() == true
+        val prevFocus = existing?.hasFocus() == true || isFocusedState()
         val prevSelStart = existing?.selectionStart ?: -1
         val prevSelEnd = existing?.selectionEnd ?: -1
 
-        container.removeAllViews()
+        suppressFocusListener = true
+        val nextEditText: EditText = try {
+            container.removeAllViews()
 
-        val nextEditText: EditText = if (wantLabeled) {
-            val matResult = runCatching {
-                val matCtx = resolveMaterialContext(container.context, isDark)
-                val til = textInputLayout ?: TextInputLayout(matCtx).also { layout ->
-                    layout.boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-                    layout.isHintEnabled = true
-                    textInputLayout = layout
-                }
-                val edit = labeledEditText ?: TextInputEditText(til.context).also { input ->
-                    wireEditTextListeners(input)
-                    labeledEditText = input
-                }
-                if (edit.parent !== til) {
-                    (edit.parent as? ViewGroup)?.removeView(edit)
-                    til.addView(
-                        edit,
-                        LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
+            if (wantLabeled) {
+                val matResult = runCatching {
+                    val matCtx = resolveMaterialContext(container.context, isDark)
+                    val til = textInputLayout ?: TextInputLayout(matCtx).also { layout ->
+                        layout.boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                        layout.isHintEnabled = true
+                        textInputLayout = layout
+                    }
+                    val edit = labeledEditText ?: TextInputEditText(til.context).also { input ->
+                        wireEditTextListeners(input)
+                        labeledEditText = input
+                    }
+                    if (edit.parent !== til) {
+                        (edit.parent as? ViewGroup)?.removeView(edit)
+                        til.addView(
+                            edit,
+                            LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
+                        )
+                    }
+                    (til.parent as? ViewGroup)?.removeView(til)
+                    container.addView(
+                        til,
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT
                         )
                     )
+                    isShowingLabeledMode = true
+                    edit
                 }
-                (til.parent as? ViewGroup)?.removeView(til)
-                container.addView(
-                    til,
-                    FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.WRAP_CONTENT
+                matResult.getOrElse {
+                    val bare = obtainBareEditText(container.context)
+                    (bare.parent as? ViewGroup)?.removeView(bare)
+                    container.addView(
+                        bare,
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT
+                        )
                     )
-                )
-                isShowingLabeledMode = true
-                edit
-            }
-            matResult.getOrElse {
+                    isShowingLabeledMode = false
+                    bare
+                }
+            } else {
                 val bare = obtainBareEditText(container.context)
                 (bare.parent as? ViewGroup)?.removeView(bare)
                 container.addView(
@@ -166,18 +198,8 @@ class AndroidTextInputImpl(
                 isShowingLabeledMode = false
                 bare
             }
-        } else {
-            val bare = obtainBareEditText(container.context)
-            (bare.parent as? ViewGroup)?.removeView(bare)
-            container.addView(
-                bare,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-            isShowingLabeledMode = false
-            bare
+        } finally {
+            suppressFocusListener = false
         }
 
         activeEditText = nextEditText
@@ -193,13 +215,13 @@ class AndroidTextInputImpl(
         if (prevSelStart in 0..textLen && prevSelEnd in 0..textLen) {
             runCatching { nextEditText.setSelection(prevSelStart, prevSelEnd) }
         }
-        if (prevFocus && isFocusable()) {
-            runCatching { nextEditText.requestFocus() }
+        if (prevFocus && isEnabled() && isFocusable() && !readOnlyState) {
+            applyAndroidFocusToTarget(nextEditText, true)
         }
         return nextEditText
     }
 
-    override fun createDefaultAndroidView(context: Context): View = FrameLayout(context)
+    override fun createDefaultAndroidView(context: Context): View = createHostContainerView(context)
 
     override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
 
@@ -275,6 +297,80 @@ class AndroidTextInputImpl(
         syncAndroidView()
     }
 
+    protected open fun applyEditTextVisualStyling(
+        container: FrameLayout,
+        editText: EditText,
+        isDark: Boolean
+    ) {
+        val activeTheme = BootstrapColorPalette.activeThemeConfig
+        val focusAccentArgb = BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, isDark, activeTheme).toArgbInt()
+        val bareBgArgb = customStyleBackgroundColor?.toArgbInt()
+            ?: if (isDark) 0xFF161920.toInt() else 0xFFFFFFFF.toInt()
+        val outlinedBoxBgArgb = customStyleBackgroundColor?.toArgbInt()
+            ?: android.graphics.Color.TRANSPARENT
+        val borderArgb = customStyleBorderColor?.toArgbInt()
+            ?: if (isDark) 0xFF767A85.toInt() else 0xFF79747E.toInt()
+        val textArgb = customStyleTextColor?.toArgbInt()
+            ?: if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
+        val hintArgb = if (isDark) 0xFF7B8498.toInt() else 0xFF777E8E.toInt()
+        val labelArgb = if (isDark) 0xFF9AA4B8.toInt() else 0xFF5F6676.toInt()
+
+        val til = textInputLayout
+        if (isShowingLabeledMode && til != null) {
+            til.boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            til.isHintEnabled = true
+            til.hint = labelText
+            til.placeholderText = nativeWidget.hint.takeIf { it.isNotEmpty() }
+            til.setPlaceholderTextColor(ColorStateList.valueOf(hintArgb))
+            val rPx = resolveEffectiveBorderRadiusPx(6f)
+            til.setBoxCornerRadii(rPx, rPx, rPx, rPx)
+            til.boxBackgroundColor = outlinedBoxBgArgb
+            val strokeStates = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                intArrayOf(focusAccentArgb, borderArgb)
+            )
+            til.setBoxStrokeColorStateList(strokeStates)
+            val labelStates = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                intArrayOf(focusAccentArgb, labelArgb)
+            )
+            til.defaultHintTextColor = labelStates
+            til.hintTextColor = labelStates
+            til.isEnabled = isEnabled()
+            if (editText.hint != null) {
+                editText.hint = null
+            }
+        } else {
+            if (editText.hint?.toString() != nativeWidget.hint) {
+                editText.hint = nativeWidget.hint
+            }
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = resolveEffectiveBorderRadiusPx(6f)
+                setColor(bareBgArgb)
+                val strokePx = AndroidViewHandle.dpToPx((customStyleBorderWidthPx ?: 1f).coerceAtLeast(1f)).coerceAtLeast(1)
+                setStroke(strokePx, borderArgb)
+            }
+            editText.background = bg
+            editText.setHintTextColor(hintArgb)
+            val p = getPadding()
+            if (p.left == 0 && p.top == 0 && p.right == 0 && p.bottom == 0 && getPaddingScale() == null) {
+                val hPad = AndroidViewHandle.dpToPx(10)
+                val vPad = AndroidViewHandle.dpToPx(8)
+                editText.setPadding(hPad, vPad, hPad, vPad)
+            }
+        }
+
+        editText.setTextColor(textArgb)
+        val spSize = customStyleFontSizePx?.takeIf { it > 0f } ?: 14f
+        editText.setTextSize(TypedValue.COMPLEX_UNIT_SP, spSize)
+    }
+
+    protected open fun onAfterSyncAndroidView(
+        container: FrameLayout,
+        editText: EditText
+    ) = Unit
+
     override fun syncAndroidView() {
         super.syncAndroidView()
         if (!initialized) return
@@ -294,68 +390,7 @@ class AndroidTextInputImpl(
                     }
                 }
 
-                val activeTheme = BootstrapColorPalette.activeThemeConfig
-                val focusAccentArgb = BootstrapColorPalette.resolveColor(BootstrapType.PRIMARY, isDark, activeTheme).toArgbInt()
-                val bareBgArgb = customStyleBackgroundColor?.toArgbInt()
-                    ?: if (isDark) 0xFF161920.toInt() else 0xFFFFFFFF.toInt()
-                val outlinedBoxBgArgb = customStyleBackgroundColor?.toArgbInt()
-                    ?: android.graphics.Color.TRANSPARENT
-                val borderArgb = customStyleBorderColor?.toArgbInt()
-                    ?: if (isDark) 0xFF767A85.toInt() else 0xFF79747E.toInt()
-                val textArgb = customStyleTextColor?.toArgbInt()
-                    ?: if (isDark) 0xFFECEFF4.toInt() else 0xFF1C1B1F.toInt()
-                val hintArgb = if (isDark) 0xFF7B8498.toInt() else 0xFF777E8E.toInt()
-                val labelArgb = if (isDark) 0xFF9AA4B8.toInt() else 0xFF5F6676.toInt()
-
-                val til = textInputLayout
-                if (isShowingLabeledMode && til != null) {
-                    til.boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-                    til.isHintEnabled = true
-                    til.hint = labelText
-                    til.placeholderText = nativeWidget.hint.takeIf { it.isNotEmpty() }
-                    til.setPlaceholderTextColor(ColorStateList.valueOf(hintArgb))
-                    val rPx = resolveEffectiveBorderRadiusPx(6f)
-                    til.setBoxCornerRadii(rPx, rPx, rPx, rPx)
-                    til.boxBackgroundColor = outlinedBoxBgArgb
-                    val strokeStates = ColorStateList(
-                        arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
-                        intArrayOf(focusAccentArgb, borderArgb)
-                    )
-                    til.setBoxStrokeColorStateList(strokeStates)
-                    val labelStates = ColorStateList(
-                        arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
-                        intArrayOf(focusAccentArgb, labelArgb)
-                    )
-                    til.defaultHintTextColor = labelStates
-                    til.hintTextColor = labelStates
-                    til.isEnabled = isEnabled()
-                    if (editText.hint != null) {
-                        editText.hint = null
-                    }
-                } else {
-                    if (editText.hint?.toString() != nativeWidget.hint) {
-                        editText.hint = nativeWidget.hint
-                    }
-                    val bg = GradientDrawable().apply {
-                        shape = GradientDrawable.RECTANGLE
-                        cornerRadius = resolveEffectiveBorderRadiusPx(6f)
-                        setColor(bareBgArgb)
-                        val strokePx = AndroidViewHandle.dpToPx((customStyleBorderWidthPx ?: 1f).coerceAtLeast(1f)).coerceAtLeast(1)
-                        setStroke(strokePx, borderArgb)
-                    }
-                    editText.background = bg
-                    editText.setHintTextColor(hintArgb)
-                    val p = getPadding()
-                    if (p.left == 0 && p.top == 0 && p.right == 0 && p.bottom == 0 && getPaddingScale() == null) {
-                        val hPad = AndroidViewHandle.dpToPx(10)
-                        val vPad = AndroidViewHandle.dpToPx(8)
-                        editText.setPadding(hPad, vPad, hPad, vPad)
-                    }
-                }
-
-                editText.setTextColor(textArgb)
-                val spSize = customStyleFontSizePx?.takeIf { it > 0f } ?: 14f
-                editText.setTextSize(TypedValue.COMPLEX_UNIT_SP, spSize)
+                applyEditTextVisualStyling(container, editText, isDark)
 
                 when {
                     passwordState -> {
@@ -385,6 +420,16 @@ class AndroidTextInputImpl(
                 editText.isFocusable = focusableEdit
                 editText.isFocusableInTouchMode = focusableEdit
                 editText.isCursorVisible = focusableEdit
+
+                val pendingFocus = consumePendingFocusSync()
+                if (focusableEdit && (pendingFocus || isFocusedState())) {
+                    if (!editText.hasFocus()) {
+                        applyAndroidFocusToTarget(editText, true)
+                    }
+                } else if (!focusableEdit && editText.hasFocus()) {
+                    editText.clearFocus()
+                }
+                onAfterSyncAndroidView(container, editText)
             }
         }
     }
