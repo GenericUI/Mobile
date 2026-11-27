@@ -7,6 +7,8 @@ import com.nexustools.genericui.nativeimpl.surface.StyledComponentNativeImpl
 import com.nexustools.genericui.style.bootstrap.ComponentBootstrap
 import com.nexustools.genericui.style.css.ComponentStyle
 import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssFilter
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.Gradient
 import com.nexustools.genericui.style.policy.AestheticStylePolicy
@@ -15,6 +17,55 @@ import kotlinx.cinterop.CValue
 import platform.CoreGraphics.CGRect
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIView
+
+internal fun applyIosStyledFilterAttribute(
+    name: String,
+    value: String?,
+    getBase: () -> StyledVisualSpec,
+    setBase: (StyledVisualSpec) -> Unit
+) {
+    when (name.trim().lowercase()) {
+        "backdrop-filter", "-webkit-backdrop-filter", "backdropfilter" -> {
+            val trimmed = value?.trim()?.takeIf { it.isNotEmpty() }
+            val parsed = trimmed?.let { CssFilter.parse(it) }
+            setBase(
+                getBase().copy(
+                    backdropBlurPx = parsed?.blur?.resolvePx(),
+                    backdropFilter = parsed
+                )
+            )
+        }
+        "backdropblurpx", "data-backdrop-blur-px" -> {
+            val px = value?.trim()?.removeSuffix("px")?.toFloatOrNull()
+            val cur = getBase()
+            val nextBf = cur.backdropFilter?.copy(
+                blur = px?.takeIf { it > 0f }?.let { CssLength.px(it) }
+            )
+            setBase(cur.copy(backdropBlurPx = px, backdropFilter = nextBf))
+        }
+        "filter" -> {
+            val trimmed = value?.trim()?.takeIf { it.isNotEmpty() }
+            val parsed = trimmed?.let { CssFilter.parse(it) }
+            setBase(getBase().copy(filter = parsed))
+        }
+    }
+}
+
+private class UikitStyledComponentView(
+    frame: CValue<CGRect>
+) : UIView(frame = frame) {
+    var onLayoutSubviewsCallback: (() -> Unit)? = null
+
+    override fun layoutSubviews() {
+        super.layoutSubviews()
+        onLayoutSubviewsCallback?.invoke()
+    }
+
+    override fun didMoveToWindow() {
+        super.didMoveToWindow()
+        onLayoutSubviewsCallback?.invoke()
+    }
+}
 
 /**
  * Native UIKit `UIView` implementation of [StyledComponentNativeImpl] backed by
@@ -28,7 +79,7 @@ class IosStyledComponentImpl(
     tagName: String = "genericui:styled-component",
     val layoutTarget: LayoutBackendTarget = LayoutBackendTarget.IOS
 ) : IosBaseNativeImpl(
-    nativeWidget = UikitViewHandle(UIView(frame)),
+    nativeWidget = UikitViewHandle(UikitStyledComponentView(frame)),
     componentClassPrefix = classPrefix,
     initialTagName = tagName
 ), StyledComponentNativeImpl<UikitViewHandle> {
@@ -46,6 +97,9 @@ class IosStyledComponentImpl(
     internal val backdropController = UikitBackdropBlurController(uiView)
 
     init {
+        (uiView as? UikitStyledComponentView)?.onLayoutSubviewsCallback = {
+            refreshChromeAfterLayout()
+        }
         actionTarget.onHoveredChanged = { hovered ->
             setHoveredState(hovered)
         }
@@ -199,7 +253,40 @@ class IosStyledComponentImpl(
         )
     }
 
+    private fun refreshChromeAfterLayout() {
+        val v = resolveCurrentVisuals()
+        IosStyledVisualUtil.applyLayerChrome(
+            view = uiView,
+            spec = v,
+            isFocused = isFocusedState(),
+            componentStyle = visualController.lastComponentStyle,
+            chromeState = chromeState
+        )
+        chromeState.gradientLayer = IosStyledVisualUtil.applyGradientLayer(
+            uiView,
+            chromeState.gradientLayer,
+            v.backgroundGradient ?: getBackgroundGradient()
+        )
+        backdropController.refreshOnLayoutIfNeeded(
+            visuals = v,
+            cornerRadiusPt = uiView.layer.cornerRadius,
+            clipsToBounds = uiView.clipsToBounds,
+            effectiveFilter = visualController.resolveEffectiveBackdropFilter(v)
+        )
+    }
+
+    override fun setAttribute(name: String, value: String?) {
+        super<IosBaseNativeImpl>.setAttribute(name, value)
+        applyIosStyledFilterAttribute(
+            name = name,
+            value = value,
+            getBase = { visualController.baseVisuals },
+            setBase = { setStyledVisuals(it) }
+        )
+    }
+
     override fun dispose() {
+        (uiView as? UikitStyledComponentView)?.onLayoutSubviewsCallback = null
         backdropController.clear()
         super.dispose()
     }

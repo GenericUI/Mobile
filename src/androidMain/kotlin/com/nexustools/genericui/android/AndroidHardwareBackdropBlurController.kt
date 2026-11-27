@@ -22,6 +22,9 @@ import com.nexustools.genericui.jvm.style.JvmBackdropCapturePlan
 import com.nexustools.genericui.jvm.style.JvmBackdropCapturePlanner
 import com.nexustools.genericui.style.css.CssFilter
 import java.lang.ref.WeakReference
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -89,6 +92,7 @@ class AndroidHardwareBackdropBlurController(
     private val clipPath = Path()
     private val clipRectF = RectF()
     private val textureDestRect = Rect()
+    private val srcRect = Rect()
     private val destRectF = RectF()
 
     fun hasActiveBackdrop(): Boolean =
@@ -100,6 +104,8 @@ class AndroidHardwareBackdropBlurController(
         if (w <= 0 || h <= 0) return
         val effFilter = CssFilter.backdropBlurOrFilter(backdropBlurPx.takeIf { it > 0f }, backdropFilter)
             ?: return
+        val filterOpacity = effFilter.opacity
+        if (filterOpacity != null && filterOpacity <= 0.004f) return
         val activeSet = activeCaptureThreadLocal.get() ?: return
         if (!activeSet.add(hostView)) return
         try {
@@ -113,7 +119,7 @@ class AndroidHardwareBackdropBlurController(
             ) {
                 drawHardwareApi31(canvas, effFilter, plan, rootGroup, path, relOffset.first, relOffset.second, w, h)
             } else {
-                drawDownsampledFallback(canvas, plan, rootGroup, path, relOffset.first, relOffset.second, w, h)
+                drawDownsampledFallback(canvas, effFilter, plan, rootGroup, path, relOffset.first, relOffset.second, w, h)
             }
         } finally {
             activeSet.remove(hostView)
@@ -158,8 +164,14 @@ class AndroidHardwareBackdropBlurController(
     ) {
         val blurPx = plan.blurPx
         val pad = plan.blurPaddingPx
-        val recW = width + pad * 2
-        val recH = height + pad * 2
+        val rootW = max(rootGroup.width, ceil(hostX + width).toInt())
+        val rootH = max(rootGroup.height, ceil(hostY + height).toInt())
+        val effPadL = pad.coerceIn(0, floor(hostX).toInt().coerceAtLeast(0))
+        val effPadT = pad.coerceIn(0, floor(hostY).toInt().coerceAtLeast(0))
+        val effPadR = pad.coerceIn(0, max(0, rootW - ceil(hostX + width).toInt()))
+        val effPadB = pad.coerceIn(0, max(0, rootH - ceil(hostY + height).toInt()))
+        val recW = width + effPadL + effPadR
+        val recH = height + effPadT + effPadB
 
         val node = (renderNodeApi29 as? RenderNode) ?: RenderNode("GenericUiBackdropBlur").also {
             renderNodeApi29 = it
@@ -171,7 +183,7 @@ class AndroidHardwareBackdropBlurController(
         val recCanvas = node.beginRecording(recW, recH)
         try {
             recCanvas.save()
-            recCanvas.translate(pad.toFloat() - hostX, pad.toFloat() - hostY)
+            recCanvas.translate(effPadL.toFloat() - hostX, effPadT.toFloat() - hostY)
             drawSubtreeUpToPath(rootGroup, path, 0, recCanvas)
             recCanvas.restore()
         } finally {
@@ -180,7 +192,7 @@ class AndroidHardwareBackdropBlurController(
 
         val saveCount = canvas.save()
         clipToHostRoundedRect(canvas, width, height)
-        canvas.translate(-pad.toFloat(), -pad.toFloat())
+        canvas.translate(-effPadL.toFloat(), -effPadT.toFloat())
         canvas.drawRenderNode(node)
         canvas.restoreToCount(saveCount)
     }
@@ -211,8 +223,25 @@ class AndroidHardwareBackdropBlurController(
         return effect
     }
 
+    private fun computeDirectionalHaloPadding(filter: CssFilter): IntArray {
+        val blurPx = if (filter.hasBlur) (filter.blur?.resolvePx() ?: 0f).coerceIn(0f, 48f) else 0f
+        val blurPad = if (blurPx > 0f) ceil(blurPx * 1.5f).toInt().coerceIn(1, 72) else 0
+        val shadow = filter.dropShadow?.takeIf { filter.hasDropShadow }
+        val shadowBlurPx = if (shadow != null) (shadow.blurRadius.resolvePx() ?: 0f).coerceIn(0f, 48f) else 0f
+        val shadowBlurPad = if (shadow != null && shadowBlurPx > 0f) ceil(shadowBlurPx * 1.5f).toInt().coerceIn(1, 72) else 0
+        val shadowOffX = shadow?.offsetX?.resolvePx() ?: 0f
+        val shadowOffY = shadow?.offsetY?.resolvePx() ?: 0f
+        val shadowSpread = abs(shadow?.spreadRadius?.resolvePx() ?: 0f)
+        val padLeft = if (shadow != null) max(blurPad, shadowBlurPad + ceil(max(0f, shadowOffX) + shadowSpread).toInt().coerceAtMost(64)) else blurPad
+        val padRight = if (shadow != null) max(blurPad, shadowBlurPad + ceil(max(0f, -shadowOffX) + shadowSpread).toInt().coerceAtMost(64)) else blurPad
+        val padTop = if (shadow != null) max(blurPad, shadowBlurPad + ceil(max(0f, shadowOffY) + shadowSpread).toInt().coerceAtMost(64)) else blurPad
+        val padBottom = if (shadow != null) max(blurPad, shadowBlurPad + ceil(max(0f, -shadowOffY) + shadowSpread).toInt().coerceAtMost(64)) else blurPad
+        return intArrayOf(padLeft, padTop, padRight, padBottom)
+    }
+
     private fun drawDownsampledFallback(
         canvas: Canvas,
+        effFilter: CssFilter,
         plan: JvmBackdropCapturePlan,
         rootGroup: ViewGroup,
         path: List<View>,
@@ -222,8 +251,22 @@ class AndroidHardwareBackdropBlurController(
         height: Int
     ) {
         val dsScale = plan.downsampleScale
-        val bmpW = plan.captureWidth
-        val bmpH = plan.captureHeight
+        val regW = plan.captureWidth
+        val regH = plan.captureHeight
+        val pads = computeDirectionalHaloPadding(effFilter)
+        val rootW = max(rootGroup.width, ceil(hostX + width).toInt())
+        val rootH = max(rootGroup.height, ceil(hostY + height).toInt())
+        val effPadL = pads[0].coerceIn(0, floor(hostX).toInt().coerceAtLeast(0))
+        val effPadT = pads[1].coerceIn(0, floor(hostY).toInt().coerceAtLeast(0))
+        val effPadR = pads[2].coerceIn(0, max(0, rootW - ceil(hostX + width).toInt()))
+        val effPadB = pads[3].coerceIn(0, max(0, rootH - ceil(hostY + height).toInt()))
+
+        val dsPadL = if (dsScale > 1) ceil(effPadL / dsScale.toFloat()).toInt() else effPadL
+        val dsPadT = if (dsScale > 1) ceil(effPadT / dsScale.toFloat()).toInt() else effPadT
+        val dsPadR = if (dsScale > 1) ceil(effPadR / dsScale.toFloat()).toInt() else effPadR
+        val dsPadB = if (dsScale > 1) ceil(effPadB / dsScale.toFloat()).toInt() else effPadB
+        val bmpW = regW + dsPadL + dsPadR
+        val bmpH = regH + dsPadT + dsPadB
 
         var bmp = cachedBackdropBitmap
         if (bmp == null || bmp.width != bmpW || bmp.height != bmpH || bmp.isRecycled) {
@@ -241,8 +284,9 @@ class AndroidHardwareBackdropBlurController(
         bmp.eraseColor(0)
         val capCanvas = Canvas(bmp)
         capCanvas.save()
+        capCanvas.translate(dsPadL.toFloat(), dsPadT.toFloat())
         if (dsScale > 1) {
-            capCanvas.scale(bmpW.toFloat() / width.toFloat(), bmpH.toFloat() / height.toFloat())
+            capCanvas.scale(regW.toFloat() / width.toFloat(), regH.toFloat() / height.toFloat())
         }
         capCanvas.translate(-hostX, -hostY)
         try {
@@ -256,18 +300,19 @@ class AndroidHardwareBackdropBlurController(
             argbPixels = pixels,
             bufferWidth = bmpW,
             bufferHeight = bmpH,
-            regionX = 0,
-            regionY = 0,
-            regionWidth = bmpW,
-            regionHeight = bmpH,
+            regionX = dsPadL,
+            regionY = dsPadT,
+            regionWidth = regW,
+            regionHeight = regH,
             cornerRadiusPx = 0f
         )
         bmp.setPixels(pixels, 0, bmpW, 0, 0, bmpW, bmpH)
 
         val saveCount = canvas.save()
         clipToHostRoundedRect(canvas, width, height)
+        srcRect.set(dsPadL, dsPadT, dsPadL + regW, dsPadT + regH)
         destRectF.set(0f, 0f, width.toFloat(), height.toFloat())
-        canvas.drawBitmap(bmp, null, destRectF, bitmapPaint)
+        canvas.drawBitmap(bmp, srcRect, destRectF, bitmapPaint)
         canvas.restoreToCount(saveCount)
     }
 

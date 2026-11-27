@@ -9,56 +9,56 @@ import com.nexustools.genericui.style.css.CssFilter
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import kotlinx.cinterop.useContents
 import platform.CoreGraphics.CGContextTranslateCTM
+import platform.CoreGraphics.CGImageGetHeight
 import platform.CoreGraphics.CGImageRelease
+import platform.CoreGraphics.CGImageRetain
 import platform.CoreGraphics.CGPointMake
+import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
-import platform.UIKit.UIBlurEffect
-import platform.UIKit.UIBlurEffectStyle
+import platform.CoreImage.CIImage
+import platform.Foundation.CFBridgingRelease
+import platform.QuartzCore.CATransaction
+import platform.QuartzCore.kCAGravityResize
 import platform.UIKit.UIColor
 import platform.UIKit.UIGraphicsBeginImageContextWithOptions
 import platform.UIKit.UIGraphicsEndImageContext
 import platform.UIKit.UIGraphicsGetCurrentContext
 import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
-import platform.UIKit.UIImage
-import platform.UIKit.UIImageView
+import platform.UIKit.UIScreen
 import platform.UIKit.UIView
-import platform.UIKit.UIViewAnimationCurve
 import platform.UIKit.UIViewAutoresizingFlexibleHeight
 import platform.UIKit.UIViewAutoresizingFlexibleWidth
-import platform.UIKit.UIViewContentMode
-import platform.UIKit.UIViewPropertyAnimator
-import platform.UIKit.UIVisualEffectView
 import kotlin.math.roundToInt
 
 /**
- * Dual-path UIKit `backdrop-filter` controller shared by [IosStyledContainerImpl],
- * [IosStyledComponentImpl], and [IosStyledButtonImpl] (and inherited by iPadOS):
+ * Metal GPU CoreImage `backdrop-filter` controller shared by [IosStyledContainerImpl],
+ * [IosStyledComponentImpl], and [IosStyledButtonImpl] (and inherited by iPadOS).
  *
- * - Pure `blur(...)` filters use a live hardware Metal `CABackdropLayer` + `UIVisualEffectView` +
- *   paused `UIViewPropertyAnimator.fractionComplete`.
- * - Non-blur pixel ops (`brightness`, `contrast`, `grayscale`, `hue-rotate`, `invert`, `opacity`,
- *   `saturate`, `sepia`) and `drop-shadow` switch cleanly to `:apple`'s
- *   [AppleBackdropFilterController] `CIContext` CoreImage underlay pipeline covering all 10 W3C
- *   filter functions.
+ * Routes all 10 W3C CSS `backdrop-filter` functions (`blur`, `brightness`, `contrast`,
+ * `grayscale`, `hue-rotate`, `invert`, `opacity`, `saturate`, `sepia`, `drop-shadow`)
+ * through `:apple`'s [AppleBackdropFilterController] Metal-backed `CIContext` using
+ * preceding-paint-order isolation, halo-padded capture at native display scale, and
+ * ping-pong BGRA `IOSurface` (with `CGImage` fallback) presentation.
  */
 class UikitBackdropBlurController(
     private val hostView: UIView
 ) {
-    private var blurEffectView: UIVisualEffectView? = null
-    private var tintOverlayView: UIView? = null
-    private var intensityAnimator: UIViewPropertyAnimator? = null
-    private var activeStyle: UIBlurEffectStyle? = null
-
-    private var filteredBackdropView: UIImageView? = null
+    private var filteredBackdropView: UIView? = null
     private var filteredTintOverlayView: UIView? = null
     private var lastAppliedFilter: CssFilter? = null
     private var lastAppliedBackgroundColor: RgbaColor? = null
+    private var lastCapturedFilter: CssFilter? = null
+    private var lastCapturedOriginX: Double = Double.NaN
+    private var lastCapturedOriginY: Double = Double.NaN
     private var lastCapturedWidthPt: Double = -1.0
     private var lastCapturedHeightPt: Double = -1.0
+    private var needsCaptureRetry: Boolean = false
     private var capturingUnderlay: Boolean = false
 
+    private val outputPool = AppleBackdropFilterController.IoSurfacePingPongPool()
+
     val isActive: Boolean
-        get() = blurEffectView != null || filteredBackdropView != null
+        get() = filteredBackdropView != null
 
     val isUsingCoreImageUnderlay: Boolean
         get() = filteredBackdropView != null
@@ -74,19 +74,14 @@ class UikitBackdropBlurController(
                 visuals.backdropBlurPx ?: visuals.backdropFilter?.blur?.resolvePx(),
                 visuals.backdropFilter
             )
-        if (effFilter == null) {
+        if (effFilter == null || effFilter.isNone || !effFilter.hasActiveEffects) {
             clear()
             return false
         }
 
-        val isDark = UikitGeometryAndColorUtil.isDarkActive()
         lastAppliedFilter = effFilter
         lastAppliedBackgroundColor = visuals.backgroundColor
-
-        if (AppleBackdropFilterController.requiresFullFilterPipeline(effFilter)) {
-            return applyCoreImageUnderlay(effFilter, visuals.backgroundColor, cornerRadiusPt, clipsToBounds, isDark)
-        }
-        return applyNativeUiVisualEffect(effFilter, visuals.backgroundColor, cornerRadiusPt, clipsToBounds, isDark)
+        return applyCoreImageUnderlay(effFilter, visuals.backgroundColor, cornerRadiusPt, clipsToBounds)
     }
 
     fun refreshOnLayoutIfNeeded(
@@ -96,127 +91,82 @@ class UikitBackdropBlurController(
         effectiveFilter: CssFilter? = null
     ) {
         if (!isActive || capturingUnderlay) return
+        val effFilter = effectiveFilter
+            ?: CssFilter.backdropBlurOrFilter(
+                visuals.backdropBlurPx ?: visuals.backdropFilter?.blur?.resolvePx(),
+                visuals.backdropFilter
+            )
+        if (effFilter == null || effFilter.isNone || !effFilter.hasActiveEffects) {
+            clear()
+            return
+        }
+
         val w = hostView.bounds.useContents { size.width }
         val h = hostView.bounds.useContents { size.height }
-        if (w <= 0.0 || h <= 0.0) return
-        if (isUsingCoreImageUnderlay && (w != lastCapturedWidthPt || h != lastCapturedHeightPt)) {
-            apply(visuals, cornerRadiusPt, clipsToBounds, effectiveFilter)
-        } else {
-            blurEffectView?.let {
-                it.setFrame(hostView.bounds)
-                it.layer.cornerRadius = cornerRadiusPt
-                it.layer.maskedCorners = hostView.layer.maskedCorners
-                it.clipsToBounds = clipsToBounds
+        filteredBackdropView?.let { backdropView ->
+            backdropView.setFrame(hostView.bounds)
+            backdropView.layer.cornerRadius = cornerRadiusPt
+            backdropView.layer.maskedCorners = hostView.layer.maskedCorners
+            backdropView.layer.zPosition = -1000.0
+            backdropView.clipsToBounds = clipsToBounds
+            filteredTintOverlayView?.let { tint ->
+                tint.setFrame(backdropView.bounds)
+                tint.backgroundColor = if (visuals.backgroundColor != null && visuals.backgroundColor.a > 0) {
+                    visuals.backgroundColor.toUiColor()
+                } else {
+                    UIColor.clearColor
+                }
             }
-            filteredBackdropView?.let {
-                it.setFrame(hostView.bounds)
-                it.layer.cornerRadius = cornerRadiusPt
-                it.layer.maskedCorners = hostView.layer.maskedCorners
-                it.clipsToBounds = clipsToBounds
-            }
+            hostView.backgroundColor = UIColor.clearColor
+        }
+        if (w <= 0.0 || h <= 0.0) {
+            needsCaptureRetry = true
+            return
+        }
+
+        val root = resolveRootView()
+        if (root === hostView) {
+            needsCaptureRetry = true
+            return
+        }
+        val originInRoot = hostView.convertPoint(CGPointMake(0.0, 0.0), toView = root)
+        val ox = originInRoot.useContents { x }
+        val oy = originInRoot.useContents { y }
+        if (needsCaptureRetry ||
+            lastCapturedFilter != effFilter ||
+            ox != lastCapturedOriginX ||
+            oy != lastCapturedOriginY ||
+            w != lastCapturedWidthPt ||
+            h != lastCapturedHeightPt ||
+            filteredBackdropView?.layer?.contents == null
+        ) {
+            apply(visuals, cornerRadiusPt, clipsToBounds, effFilter)
         }
     }
 
     fun clear() {
-        clearNativeBlurEffect()
         clearCoreImageUnderlay()
         lastAppliedFilter = null
         lastAppliedBackgroundColor = null
+        lastCapturedFilter = null
+        lastCapturedOriginX = Double.NaN
+        lastCapturedOriginY = Double.NaN
         lastCapturedWidthPt = -1.0
         lastCapturedHeightPt = -1.0
-    }
-
-    private fun applyNativeUiVisualEffect(
-        effFilter: CssFilter,
-        backgroundColor: RgbaColor?,
-        cornerRadiusPt: Double,
-        clipsToBounds: Boolean,
-        isDark: Boolean
-    ): Boolean {
-        clearCoreImageUnderlay()
-
-        val style = if (isDark) {
-            UIBlurEffectStyle.UIBlurEffectStyleDark
-        } else {
-            UIBlurEffectStyle.UIBlurEffectStyleLight
-        }
-
-        val view = blurEffectView ?: UIVisualEffectView(effect = null).also {
-            it.userInteractionEnabled = false
-            it.autoresizingMask = UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight
-            hostView.insertSubview(it, atIndex = 0L)
-            if (hostView is UikitFlexContainerView) {
-                hostView.backdropChromeView = it
-            }
-            blurEffectView = it
-        }
-
-        val w = hostView.bounds.useContents { size.width }
-        val h = hostView.bounds.useContents { size.height }
-        if (w > 0.0 || h > 0.0) {
-            view.setFrame(hostView.bounds)
-        }
-        view.layer.cornerRadius = cornerRadiusPt
-        view.layer.maskedCorners = hostView.layer.maskedCorners
-        view.clipsToBounds = clipsToBounds
-        view.alpha = (effFilter.opacity ?: 1f).coerceIn(0f, 1f).toDouble()
-
-        val blurPx = (effFilter.blur?.resolvePx() ?: 0f).coerceIn(0f, 48f)
-        val targetFraction = if (blurPx > 0f) {
-            (blurPx / 24f).coerceIn(0.08f, 1.0f).toDouble()
-        } else {
-            0.0
-        }
-
-        if (blurPx > 0f) {
-            if (intensityAnimator == null || activeStyle != style) {
-                intensityAnimator?.stopAnimation(true)
-                view.effect = null
-                val animator = UIViewPropertyAnimator(
-                    duration = 1.0,
-                    curve = UIViewAnimationCurve.UIViewAnimationCurveLinear,
-                    animations = {
-                        view.effect = UIBlurEffect.effectWithStyle(style)
-                    }
-                )
-                animator.pausesOnCompletion = true
-                animator.pauseAnimation()
-                intensityAnimator = animator
-                activeStyle = style
-            }
-            intensityAnimator?.fractionComplete = targetFraction
-        } else {
-            intensityAnimator?.stopAnimation(true)
-            intensityAnimator = null
-            activeStyle = null
-            view.effect = null
-        }
-
-        val overlay = tintOverlayView ?: UIView(frame = view.contentView.bounds).also {
-            it.userInteractionEnabled = false
-            it.autoresizingMask = UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight
-            view.contentView.addSubview(it)
-            tintOverlayView = it
-        }
-        overlay.setFrame(view.contentView.bounds)
-        overlay.backgroundColor = resolveGlassTintColor(effFilter, backgroundColor, isDark)
-        hostView.backgroundColor = UIColor.clearColor
-        return true
+        needsCaptureRetry = false
     }
 
     private fun applyCoreImageUnderlay(
         effFilter: CssFilter,
         backgroundColor: RgbaColor?,
         cornerRadiusPt: Double,
-        clipsToBounds: Boolean,
-        isDark: Boolean
+        clipsToBounds: Boolean
     ): Boolean {
-        clearNativeBlurEffect()
-
-        val imageView = filteredBackdropView ?: UIImageView(frame = hostView.bounds).also {
+        val backdropView = filteredBackdropView ?: UIView(frame = hostView.bounds).also {
             it.userInteractionEnabled = false
             it.autoresizingMask = UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight
-            it.contentMode = UIViewContentMode.UIViewContentModeScaleToFill
+            it.layer.contentsGravity = kCAGravityResize
+            it.layer.zPosition = -1000.0
             hostView.insertSubview(it, atIndex = 0L)
             if (hostView is UikitFlexContainerView) {
                 hostView.backdropChromeView = it
@@ -227,20 +177,24 @@ class UikitBackdropBlurController(
         val w = hostView.bounds.useContents { size.width }
         val h = hostView.bounds.useContents { size.height }
         if (w > 0.0 || h > 0.0) {
-            imageView.setFrame(hostView.bounds)
+            backdropView.setFrame(hostView.bounds)
         }
-        imageView.layer.cornerRadius = cornerRadiusPt
-        imageView.layer.maskedCorners = hostView.layer.maskedCorners
-        imageView.clipsToBounds = clipsToBounds
-        imageView.alpha = 1.0
+        if (backdropView.superview !== hostView) {
+            hostView.insertSubview(backdropView, atIndex = 0L)
+        }
+        backdropView.layer.zPosition = -1000.0
+        backdropView.layer.cornerRadius = cornerRadiusPt
+        backdropView.layer.maskedCorners = hostView.layer.maskedCorners
+        backdropView.clipsToBounds = clipsToBounds
+        backdropView.alpha = 1.0
 
-        val overlay = filteredTintOverlayView ?: UIView(frame = imageView.bounds).also {
+        val overlay = filteredTintOverlayView ?: UIView(frame = backdropView.bounds).also {
             it.userInteractionEnabled = false
             it.autoresizingMask = UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight
-            imageView.addSubview(it)
+            backdropView.addSubview(it)
             filteredTintOverlayView = it
         }
-        overlay.setFrame(imageView.bounds)
+        overlay.setFrame(backdropView.bounds)
         overlay.backgroundColor = if (backgroundColor != null && backgroundColor.a > 0) {
             backgroundColor.toUiColor()
         } else {
@@ -249,86 +203,162 @@ class UikitBackdropBlurController(
         hostView.backgroundColor = UIColor.clearColor
 
         if (w > 0.0 && h > 0.0 && !capturingUnderlay) {
-            captureAndFilterUnderlay(imageView, effFilter, w, h)
-        } else if (w > 0.0 && h > 0.0 && isDark) {
-            lastCapturedWidthPt = w
-            lastCapturedHeightPt = h
+            captureAndFilterUnderlay(backdropView, effFilter, w, h)
+        } else if (w <= 0.0 || h <= 0.0) {
+            needsCaptureRetry = true
         }
         return true
     }
 
-    private fun captureAndFilterUnderlay(
-        targetImageView: UIImageView,
-        effFilter: CssFilter,
-        widthPt: Double,
-        heightPt: Double
-    ) {
+    private fun resolveRootView(): UIView {
         var root: UIView = hostView
         while (root.superview != null) {
             root = root.superview!!
         }
+        return root
+    }
+
+    private fun captureAndFilterUnderlay(
+        targetView: UIView,
+        effFilter: CssFilter,
+        widthPt: Double,
+        heightPt: Double
+    ) {
+        val root = resolveRootView()
         if (root === hostView) {
-            lastCapturedWidthPt = widthPt
-            lastCapturedHeightPt = heightPt
+            needsCaptureRetry = true
             return
         }
 
-        capturingUnderlay = true
-        val prevHidden = hostView.hidden
-        try {
-            hostView.hidden = true
-            val originInRoot = hostView.convertPoint(CGPointMake(0.0, 0.0), toView = root)
-            val ox = originInRoot.useContents { x }
-            val oy = originInRoot.useContents { y }
+        val rectInRoot = hostView.convertRect(hostView.bounds, toView = root)
+        val (rx, ry, rw, rh) = rectInRoot.useContents {
+            doubleArrayOf(origin.x, origin.y, size.width, size.height)
+        }
+        val (rootX, rootY, rootW, rootH) = root.bounds.useContents {
+            doubleArrayOf(origin.x, origin.y, size.width, size.height)
+        }
+        val padPt = AppleBackdropFilterController.computeBackdropPaddingPt(effFilter)
+        val capX0 = maxOf(rootX, rx - padPt)
+        val capY0 = maxOf(rootY, ry - padPt)
+        val capX1 = minOf(rootX + rootW, rx + rw + padPt)
+        val capY1 = minOf(rootY + rootH, ry + rh + padPt)
+        val capW = capX1 - capX0
+        val capH = capY1 - capY0
+        if (capW <= 0.0 || capH <= 0.0) {
+            needsCaptureRetry = true
+            return
+        }
 
-            UIGraphicsBeginImageContextWithOptions(CGSizeMake(widthPt, heightPt), false, 1.0)
+        val scale = (hostView.window?.screen ?: UIScreen.mainScreen).scale.coerceAtLeast(1.0)
+        capturingUnderlay = true
+        val hiddenViews = ArrayList<UIView>()
+        fun tempHide(v: UIView) {
+            if (!v.hidden) {
+                v.hidden = true
+                hiddenViews.add(v)
+            }
+        }
+        try {
+            tempHide(hostView)
+            tempHide(targetView)
+            // Preceding-paint-order isolation: hide all siblings/branches painted AFTER hostView
+            var cur: UIView = hostView
+            while (cur !== root) {
+                val parent = cur.superview ?: break
+                val subs = parent.subviews
+                val curIdx = subs.indexOf(cur)
+                val curZ = cur.layer.zPosition
+                for (i in subs.indices) {
+                    val sib = subs[i] as? UIView ?: continue
+                    if (sib === cur) continue
+                    val sibZ = sib.layer.zPosition
+                    if (sibZ > curZ || (sibZ == curZ && i > curIdx)) {
+                        tempHide(sib)
+                    }
+                }
+                cur = parent
+            }
+
+            UIGraphicsBeginImageContextWithOptions(CGSizeMake(capW, capH), false, scale)
             try {
                 val ctx = UIGraphicsGetCurrentContext()
                 if (ctx != null) {
-                    CGContextTranslateCTM(ctx, -ox, -oy)
+                    CGContextTranslateCTM(ctx, -capX0, -capY0)
                     root.layer.renderInContext(ctx)
                 }
                 val capturedCg = UIGraphicsGetImageFromCurrentImageContext()?.CGImage
                 if (capturedCg != null) {
-                    val pxW = widthPt.roundToInt().coerceAtLeast(1)
-                    val pxH = heightPt.roundToInt().coerceAtLeast(1)
-                    val filteredCg = AppleBackdropFilterController.renderFilteredCgImage(
-                        source = capturedCg,
-                        filter = effFilter,
-                        width = pxW,
-                        height = pxH
+                    val capPxH = CGImageGetHeight(capturedCg).toDouble()
+                    val viewPxW = (widthPt * scale).roundToInt().coerceAtLeast(1)
+                    val viewPxH = (heightPt * scale).roundToInt().coerceAtLeast(1)
+                    val relLeftPx = (rx - capX0) * scale
+                    val relTopPx = (ry - capY0) * scale
+                    val cropCiRect = CGRectMake(
+                        relLeftPx,
+                        capPxH - (relTopPx + viewPxH.toDouble()),
+                        viewPxW.toDouble(),
+                        viewPxH.toDouble()
                     )
-                    if (filteredCg != null) {
+                    val ciInput = CIImage.imageWithCGImage(capturedCg).imageByClampingToExtent()
+                    val filteredCi = AppleBackdropFilterController.renderFilteredCiImage(
+                        source = ciInput,
+                        filter = effFilter,
+                        cropRectPx = cropCiRect,
+                        scaleFactor = scale,
+                        yPointsUp = true
+                    )
+                    val outBounds = CGRectMake(0.0, 0.0, viewPxW.toDouble(), viewPxH.toDouble())
+                    val outSurface = outputPool.acquire(viewPxW, viewPxH)
+                    var applied = false
+                    if (outSurface != null &&
+                        AppleBackdropFilterController.renderCiImageToIoSurface(filteredCi, outBounds, outSurface)
+                    ) {
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
                         try {
-                            targetImageView.image = UIImage.imageWithCGImage(filteredCg)
+                            targetView.layer.contentsScale = scale
+                            targetView.layer.contents = AppleBackdropFilterController.ioSurfaceToLayerContents(outSurface)
                         } finally {
-                            CGImageRelease(filteredCg)
+                            CATransaction.commit()
+                        }
+                        applied = true
+                    }
+                    if (!applied) {
+                        val filteredCg = AppleBackdropFilterController.renderFilteredCiImageToCgImage(
+                            ciImage = filteredCi,
+                            cropRectPx = outBounds
+                        )
+                        if (filteredCg != null) {
+                            try {
+                                CATransaction.begin()
+                                CATransaction.setDisableActions(true)
+                                try {
+                                    targetView.layer.contentsScale = scale
+                                    targetView.layer.contents = CFBridgingRelease(CGImageRetain(filteredCg))
+                                } finally {
+                                    CATransaction.commit()
+                                }
+                            } finally {
+                                CGImageRelease(filteredCg)
+                            }
                         }
                     }
+                    lastCapturedFilter = effFilter
+                    lastCapturedOriginX = rx
+                    lastCapturedOriginY = ry
+                    lastCapturedWidthPt = widthPt
+                    lastCapturedHeightPt = heightPt
+                    needsCaptureRetry = false
                 }
             } finally {
                 UIGraphicsEndImageContext()
             }
-            lastCapturedWidthPt = widthPt
-            lastCapturedHeightPt = heightPt
         } finally {
-            hostView.hidden = prevHidden
+            for (i in hiddenViews.lastIndex downTo 0) {
+                hiddenViews[i].hidden = false
+            }
             capturingUnderlay = false
         }
-    }
-
-    private fun clearNativeBlurEffect() {
-        intensityAnimator?.stopAnimation(true)
-        intensityAnimator = null
-        activeStyle = null
-        tintOverlayView?.removeFromSuperview()
-        tintOverlayView = null
-        val existing = blurEffectView
-        if (hostView is UikitFlexContainerView && hostView.backdropChromeView === existing) {
-            hostView.backdropChromeView = null
-        }
-        existing?.removeFromSuperview()
-        blurEffectView = null
     }
 
     private fun clearCoreImageUnderlay() {
@@ -338,31 +368,9 @@ class UikitBackdropBlurController(
         if (hostView is UikitFlexContainerView && hostView.backdropChromeView === existing) {
             hostView.backdropChromeView = null
         }
+        existing?.layer?.contents = null
         existing?.removeFromSuperview()
         filteredBackdropView = null
-    }
-
-    private fun resolveGlassTintColor(
-        filter: CssFilter,
-        backgroundColor: RgbaColor?,
-        isDark: Boolean
-    ): UIColor {
-        var tint = backgroundColor ?: RgbaColor(0, 0, 0, 0)
-        val br = filter.brightness
-        if (br != null && br != 1f && tint.a == 0) {
-            tint = if (br > 1f) {
-                RgbaColor(255, 255, 255, ((br - 1f).coerceIn(0f, 1f) * 72f).roundToInt())
-            } else {
-                RgbaColor(0, 0, 0, ((1f - br).coerceIn(0f, 1f) * 140f).roundToInt())
-            }
-        }
-        val sat = filter.saturate
-        if (sat != null && sat > 1f && tint.a == 0) {
-            val boostAlpha = (((sat - 1f).coerceIn(0f, 2f)) * (if (isDark) 18f else 14f)).roundToInt()
-            if (boostAlpha > 0) {
-                tint = if (isDark) RgbaColor(32, 38, 48, boostAlpha) else RgbaColor(255, 255, 255, boostAlpha)
-            }
-        }
-        return if (tint.a > 0) tint.toUiColor() else UIColor.clearColor
+        outputPool.releaseAll()
     }
 }

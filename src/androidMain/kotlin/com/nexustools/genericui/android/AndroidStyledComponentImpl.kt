@@ -163,27 +163,14 @@ class AndroidStyledComponentImpl(
                 view.backgroundTintList = null
                 val gradDrawable = AndroidStyledVisualUtil.buildGradientDrawable(current)
                 val styledView = view as? AndroidStyledComponentView
-                if (current.hasBackdropFilter && styledView != null) {
+                val hasBackdrop = CssFilter.backdropBlurOrFilter(current.backdropBlurPx, current.backdropFilter) != null
+                if (hasBackdrop && styledView != null) {
                     view.background = null
                     styledView.setWillNotDraw(false)
-                    val scaledBlurPx = rawBlurPx?.takeIf { it > 0f }?.let { AndroidViewHandle.dpToPxFloat(it) }
-                    val rawCornerRadiusPx = (current.borderRadiusPx ?: 0f).coerceAtLeast(0f)
-                    styledView.backdropController.backdropBlurPx = scaledBlurPx ?: 0f
-                    styledView.backdropController.backdropFilter = current.backdropFilter?.let { f ->
-                        if (scaledBlurPx != null) f.copy(blur = CssLength.px(scaledBlurPx)) else f
-                    } ?: scaledBlurPx?.let { CssFilter.blur(CssLength.px(it)) }
-                    styledView.backdropController.backdropCornerRadiusPx = if (rawCornerRadiusPx > 0f) {
-                        AndroidViewHandle.dpToPxFloat(rawCornerRadiusPx)
-                    } else {
-                        0f
-                    }
-                    styledView.backdropController.backdropOverlayDrawable = gradDrawable
+                    AndroidStyledVisualUtil.applyBackdropControllerSpec(styledView.backdropController, current, gradDrawable)
                 } else {
                     if (styledView != null) {
-                        styledView.backdropController.backdropBlurPx = 0f
-                        styledView.backdropController.backdropFilter = null
-                        styledView.backdropController.backdropCornerRadiusPx = 0f
-                        styledView.backdropController.backdropOverlayDrawable = null
+                        AndroidStyledVisualUtil.applyBackdropControllerSpec(styledView.backdropController, StyledVisualSpec.EMPTY, null)
                     }
                     view.background = gradDrawable
                 }
@@ -191,7 +178,7 @@ class AndroidStyledComponentImpl(
                     styledView.focusRingColorArgb = current.focusRingColor?.takeIf { focused }?.toArgbInt()
                     styledView.focusRingWidthPx = AndroidViewHandle.dpToPxFloat((current.focusRingWidthPx ?: 2f).coerceAtLeast(1f))
                     styledView.cornerRadiusPx = AndroidViewHandle.dpToPxFloat((current.borderRadiusPx ?: 0f).coerceAtLeast(0f))
-                    styledView.setWillNotDraw(!current.hasBackdropFilter && styledView.focusRingColorArgb == null)
+                    styledView.setWillNotDraw(!hasBackdrop && styledView.focusRingColorArgb == null)
                 }
 
                 val parentVg = view.parent
@@ -305,6 +292,11 @@ class AndroidStyledComponentImpl(
         syncCurrentVisuals()
     }
 
+    override fun setAttribute(name: String, value: String?) {
+        AndroidStyledVisualUtil.recordBackdropAttributeOverride(nativeWidget.attributes, name, value)
+        super<AndroidBaseNativeImpl>.setAttribute(name, value)
+    }
+
     override fun resolveCurrentVisuals(): StyledVisualSpec {
         val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
         val computedBase = StyledVisualSpec.fromComponentAndComputed(
@@ -313,25 +305,20 @@ class AndroidStyledComponentImpl(
             snapshot = snapshotForStyledVisuals(),
             darkTheme = isDark
         )
-        var effective = computedBase.mergeWith(baseVisuals)
-        if (!isEnabled()) {
-            val computedDisabled = lastComputedStyle?.disabledStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            return effective.mergeWith(computedDisabled).mergeWith(disabledVisuals)
-                .forBackend(LayoutBackendTarget.ANDROID)
-        }
-        if (hovered) {
-            val computedHover = lastComputedStyle?.hoverStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            effective = effective.mergeWith(computedHover).mergeWith(hoverVisuals)
-        }
-        if (focused) {
-            val computedFocus = lastComputedStyle?.focusStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            effective = effective.mergeWith(computedFocus).mergeWith(focusVisuals)
-        }
-        if (activePressed) {
-            val computedActive = lastComputedStyle?.activeStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
-            effective = effective.mergeWith(computedActive).mergeWith(activeVisuals)
-        }
-        return effective.forBackend(LayoutBackendTarget.ANDROID)
+        return AndroidStyledVisualUtil.resolveStateVisuals(
+            computedBase = computedBase,
+            baseVisuals = baseVisuals,
+            computedStyle = lastComputedStyle,
+            attributes = nativeWidget.attributes,
+            isEnabled = isEnabled(),
+            hovered = hovered,
+            focused = focused,
+            activePressed = activePressed,
+            hoverVisuals = hoverVisuals,
+            focusVisuals = focusVisuals,
+            activeVisuals = activeVisuals,
+            disabledVisuals = disabledVisuals
+        )
     }
 
     private class AndroidStyledComponentView(

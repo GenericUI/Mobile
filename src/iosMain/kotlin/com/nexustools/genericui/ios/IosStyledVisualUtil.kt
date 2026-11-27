@@ -54,8 +54,8 @@ internal object IosStyledVisualUtil {
             val resolvedRadii = AppleStyledSurfaceHelper.resolveCornerRadiiPx(
                 radii = cornerRadii,
                 fallbackUniformPx = fallbackRadius,
-                width = boundsW.coerceAtLeast(1.0),
-                height = boundsH.coerceAtLeast(1.0)
+                width = boundsW,
+                height = boundsH
             )
             resolvedRadii.any { it > 0.0 }
         } else {
@@ -64,15 +64,38 @@ internal object IosStyledVisualUtil {
         if (clipsHint != null) {
             view.clipsToBounds = clipsHint
         }
-        AppleStyledSurfaceHelper.applyLayerCornerRadii(
-            layer = view.layer,
-            radii = cornerRadii,
-            fallbackUniformPx = fallbackRadius,
-            boundsWidth = boundsW,
-            boundsHeight = boundsH,
-            clipsToBounds = clipsHint,
-            topLeftIsMinY = true
-        )
+        if (boundsW > 0.0 && boundsH > 0.0) {
+            AppleStyledSurfaceHelper.applyLayerCornerRadii(
+                layer = view.layer,
+                radii = cornerRadii,
+                fallbackUniformPx = fallbackRadius,
+                boundsWidth = boundsW,
+                boundsHeight = boundsH,
+                clipsToBounds = clipsHint,
+                topLeftIsMinY = true
+            )
+        } else if (cornerRadii != null || spec.borderRadiusPx != null) {
+            val tl = (cornerRadii?.topLeft?.resolvePx(referencePx = 0f) ?: fallbackRadius).coerceAtLeast(0f).toDouble()
+            val tr = (cornerRadii?.topRight?.resolvePx(referencePx = 0f) ?: fallbackRadius).coerceAtLeast(0f).toDouble()
+            val br = (cornerRadii?.bottomRight?.resolvePx(referencePx = 0f) ?: fallbackRadius).coerceAtLeast(0f).toDouble()
+            val bl = (cornerRadii?.bottomLeft?.resolvePx(referencePx = 0f) ?: fallbackRadius).coerceAtLeast(0f).toDouble()
+            val preRadius = maxOf(tl, maxOf(tr, maxOf(br, bl)))
+            view.layer.cornerRadius = preRadius
+            if (preRadius > 0.0) {
+                view.clipsToBounds = true
+                view.layer.masksToBounds = true
+            }
+        } else {
+            AppleStyledSurfaceHelper.applyLayerCornerRadii(
+                layer = view.layer,
+                radii = null,
+                fallbackUniformPx = 0f,
+                boundsWidth = 0.0,
+                boundsHeight = 0.0,
+                clipsToBounds = clipsHint,
+                topLeftIsMinY = true
+            )
+        }
 
         val focusRingColor = spec.focusRingColor.takeIf { isFocused }
         val borderColor = focusRingColor ?: spec.borderColor

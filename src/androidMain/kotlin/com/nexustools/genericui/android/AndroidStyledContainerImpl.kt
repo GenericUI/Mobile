@@ -1,7 +1,10 @@
 package com.nexustools.genericui.android
 
+import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.view.MotionEvent
+import android.view.View
 import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.css.CssBorderStyle
 import com.nexustools.genericui.enums.ui.ThemeMode
@@ -31,20 +34,41 @@ class AndroidStyledContainerImpl(
     private var styledVisuals: StyledVisualSpec = StyledVisualSpec()
     private var lastComponentStyle: ComponentStyle? = null
     private var lastComputedStyle: ComputedStyle? = null
+    private var hovered: Boolean = false
+    private var focused: Boolean = false
+    private var activePressed: Boolean = false
+    private var isSyncingVisuals: Boolean = false
 
     init {
         nativeWidget.attributes["antialiasing"] = "true"
         syncAndroidView()
     }
 
+    override fun createDefaultAndroidView(context: Context): View? =
+        super.createDefaultAndroidView(context)?.apply {
+            setOnFocusChangeListener { _, hasFocus ->
+                if (isEnabled() && isFocusable() && !nativeWidget.layerPassThrough) {
+                    setFocusedState(hasFocus)
+                }
+            }
+            setOnHoverListener { _, event ->
+                if (!isEnabled() || nativeWidget.layerPassThrough) return@setOnHoverListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_HOVER_ENTER -> setHoveredState(true)
+                    MotionEvent.ACTION_HOVER_EXIT -> setHoveredState(false)
+                }
+                false
+            }
+        }
+
     override fun shouldApplyBaseBackgroundDrawable(): Boolean = false
+
+    override fun allowsBackdropBlur(): Boolean = true
 
     fun getComputedStyle(): ComputedStyle? = lastComputedStyle
 
     private fun applyVisualsToAndroidView(visuals: StyledVisualSpec) {
         if (nativeWidget.androidView == null) return
-        val rawBlurPx = visuals.backdropBlurPx ?: visuals.backdropFilter?.blur?.resolvePx()
-        val rawCornerRadiusPx = (visuals.borderRadiusPx ?: 0f).coerceAtLeast(0f)
         val shadowBlurPx = visuals.boxShadowBlurPx
         val shadowColor = visuals.boxShadowColor
 
@@ -64,26 +88,14 @@ class AndroidStyledContainerImpl(
                 }
                 val gradDrawable = buildGradientDrawable(visuals)
                 val flexView = view as? AndroidFlexContainerView
-                if (visuals.hasBackdropFilter && flexView != null) {
+                val hasBackdrop = CssFilter.backdropBlurOrFilter(visuals.backdropBlurPx, visuals.backdropFilter) != null
+                if (hasBackdrop && flexView != null) {
                     view.background = null
                     flexView.setWillNotDraw(false)
-                    val scaledBlurPx = rawBlurPx?.takeIf { it > 0f }?.let { AndroidViewHandle.dpToPxFloat(it) }
-                    flexView.backdropBlurPx = scaledBlurPx ?: 0f
-                    flexView.backdropFilter = visuals.backdropFilter?.let { f ->
-                        if (scaledBlurPx != null) f.copy(blur = CssLength.px(scaledBlurPx)) else f
-                    } ?: scaledBlurPx?.let { CssFilter.blur(CssLength.px(it)) }
-                    flexView.backdropCornerRadiusPx = if (rawCornerRadiusPx > 0f) {
-                        AndroidViewHandle.dpToPxFloat(rawCornerRadiusPx)
-                    } else {
-                        0f
-                    }
-                    flexView.backdropOverlayDrawable = gradDrawable
+                    AndroidStyledVisualUtil.applyBackdropControllerSpec(flexView.backdropController, visuals, gradDrawable)
                 } else {
                     if (flexView != null) {
-                        flexView.backdropBlurPx = 0f
-                        flexView.backdropFilter = null
-                        flexView.backdropCornerRadiusPx = 0f
-                        flexView.backdropOverlayDrawable = null
+                        AndroidStyledVisualUtil.applyBackdropControllerSpec(flexView.backdropController, StyledVisualSpec.EMPTY, null)
                     }
                     view.background = gradDrawable
                 }
@@ -93,11 +105,23 @@ class AndroidStyledContainerImpl(
 
     override fun syncAndroidView() {
         super.syncAndroidView()
-        applyVisualsToAndroidView(getStyledVisuals())
+        if (!isSyncingVisuals) {
+            syncVisualsToAndroidView()
+        }
     }
 
     protected fun syncVisualsToAndroidView() {
-        val visuals = getStyledVisuals()
+        if (isSyncingVisuals) return
+        isSyncingVisuals = true
+        try {
+            syncVisualsToAndroidViewLocked()
+        } finally {
+            isSyncingVisuals = false
+        }
+    }
+
+    private fun syncVisualsToAndroidViewLocked() {
+        val visuals = resolveCurrentVisuals()
         nativeWidget.attributes["styledVisuals"] = visuals.toString()
         visuals.backgroundColor?.let { nativeWidget.attributes["backgroundColor"] = it.toCssRgbaString() }
         visuals.backgroundGradient?.let { nativeWidget.attributes["backgroundGradient"] = it.toCssString() }
@@ -164,7 +188,75 @@ class AndroidStyledContainerImpl(
             snapshot = snapshotForStyledVisuals(),
             darkTheme = isDark
         )
-        return computedBase.mergeWith(styledVisuals).forBackend(LayoutBackendTarget.ANDROID)
+        return AndroidStyledVisualUtil.applyBackdropAttributeOverrides(
+            computedBase.mergeWith(styledVisuals),
+            nativeWidget.attributes
+        ).forBackend(LayoutBackendTarget.ANDROID)
+    }
+
+    fun resolveCurrentVisuals(): StyledVisualSpec {
+        val isDark = SystemThemeDetector.detectSystemTheme() == ThemeMode.DARK
+        val computedBase = StyledVisualSpec.fromComponentAndComputed(
+            componentStyle = lastComponentStyle,
+            computedStyle = getComputedStyle(),
+            snapshot = snapshotForStyledVisuals(),
+            darkTheme = isDark
+        )
+        return AndroidStyledVisualUtil.resolveStateVisuals(
+            computedBase = computedBase,
+            baseVisuals = styledVisuals,
+            computedStyle = lastComputedStyle,
+            attributes = nativeWidget.attributes,
+            isEnabled = isEnabled(),
+            hovered = hovered,
+            focused = focused,
+            activePressed = activePressed
+        )
+    }
+
+    override fun setAttribute(name: String, value: String?) {
+        AndroidStyledVisualUtil.recordBackdropAttributeOverride(nativeWidget.attributes, name, value)
+        super<AndroidContainerImpl>.setAttribute(name, value)
+    }
+
+    override fun setHoveredState(hovered: Boolean) {
+        val coerced = if (!isEnabled()) false else hovered
+        this.hovered = coerced
+        nativeWidget.attributes["hovered"] = coerced.toString()
+        syncVisualsToAndroidView()
+    }
+
+    override fun isHoveredState(): Boolean = if (!isEnabled()) false else hovered
+
+    override fun setFocusedState(focused: Boolean) {
+        val coerced = if (!isEnabled() || !isFocusable()) false else focused
+        this.focused = coerced
+        nativeWidget.attributes["focused"] = coerced.toString()
+        syncVisualsToAndroidView()
+    }
+
+    override fun isFocusedState(): Boolean = if (!isEnabled() || !isFocusable()) false else focused
+
+    override fun setActivePressedState(active: Boolean) {
+        val coerced = if (!isEnabled()) false else active
+        this.activePressed = coerced
+        nativeWidget.attributes["activePressed"] = coerced.toString()
+        syncVisualsToAndroidView()
+    }
+
+    override fun isActivePressedState(): Boolean = if (!isEnabled()) false else activePressed
+
+    override fun setEnabled(enabled: Boolean) {
+        super.setEnabled(enabled)
+        if (!enabled) {
+            this.hovered = false
+            this.focused = false
+            this.activePressed = false
+            nativeWidget.attributes["hovered"] = "false"
+            nativeWidget.attributes["focused"] = "false"
+            nativeWidget.attributes["activePressed"] = "false"
+        }
+        syncVisualsToAndroidView()
     }
 
     override fun applyComputedStyle(style: ComputedStyle) {

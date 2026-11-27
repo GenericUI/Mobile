@@ -43,7 +43,10 @@ class IosBackdropAndSplitDropdownTest {
             )
         )
         assertTrue(container.backdropController.isActive)
-        assertFalse(container.backdropController.isUsingCoreImageUnderlay)
+        assertTrue(
+            container.backdropController.isUsingCoreImageUnderlay,
+            "Pure blur() must render via CoreImage Metal GPU pipeline instead of UIVisualEffectView"
+        )
 
         container.setStyledVisuals(
             StyledVisualSpec(

@@ -11,13 +11,30 @@ import com.nexustools.genericui.style.css.ComputedStyle
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.Gradient
 import com.nexustools.genericui.system.style.StyledWidgetVisualController
+import kotlinx.cinterop.CValue
+import platform.CoreGraphics.CGRect
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIButton
-import platform.UIKit.UIButtonTypeCustom
 import platform.UIKit.UIControlEventTouchUpInside
 import platform.UIKit.UIControlStateNormal
 import platform.UIKit.UIEdgeInsetsMake
 import platform.UIKit.setContentEdgeInsets
+
+private class UikitStyledButtonView(
+    frame: CValue<CGRect> = CGRectMake(0.0, 0.0, 120.0, 44.0)
+) : UIButton(frame = frame) {
+    var onLayoutSubviewsCallback: (() -> Unit)? = null
+
+    override fun layoutSubviews() {
+        super.layoutSubviews()
+        onLayoutSubviewsCallback?.invoke()
+    }
+
+    override fun didMoveToWindow() {
+        super.didMoveToWindow()
+        onLayoutSubviewsCallback?.invoke()
+    }
+}
 
 /**
  * Full-fidelity CSS aesthetic UIKit button (`StyledButton`) wrapping a custom `UIButton` with
@@ -28,9 +45,7 @@ import platform.UIKit.setContentEdgeInsets
 class IosStyledButtonImpl(
     classPrefix: String = "styled-btn",
     val layoutTarget: LayoutBackendTarget = LayoutBackendTarget.IOS,
-    val button: UIButton = UIButton.buttonWithType(UIButtonTypeCustom).apply {
-        setFrame(CGRectMake(0.0, 0.0, 120.0, 44.0))
-    }
+    val button: UIButton = UikitStyledButtonView()
 ) : IosBaseNativeImpl(
     nativeWidget = UikitViewHandle(button),
     componentClassPrefix = classPrefix
@@ -50,6 +65,9 @@ class IosStyledButtonImpl(
     internal val backdropController = UikitBackdropBlurController(button)
 
     init {
+        (button as? UikitStyledButtonView)?.onLayoutSubviewsCallback = {
+            refreshChromeAfterLayout()
+        }
         button.addTarget(
             target = actionTarget,
             action = UikitControlActionTarget.SEL_PRIMARY_ACTION,
@@ -249,7 +267,40 @@ class IosStyledButtonImpl(
         )
     }
 
+    private fun refreshChromeAfterLayout() {
+        val v = resolveCurrentVisuals()
+        IosStyledVisualUtil.applyLayerChrome(
+            view = button,
+            spec = v,
+            isFocused = isFocusedState(),
+            componentStyle = visualController.lastComponentStyle,
+            chromeState = chromeState
+        )
+        chromeState.gradientLayer = IosStyledVisualUtil.applyGradientLayer(
+            button,
+            chromeState.gradientLayer,
+            v.backgroundGradient ?: getBackgroundGradient()
+        )
+        backdropController.refreshOnLayoutIfNeeded(
+            visuals = v,
+            cornerRadiusPt = button.layer.cornerRadius,
+            clipsToBounds = button.clipsToBounds,
+            effectiveFilter = visualController.resolveEffectiveBackdropFilter(v)
+        )
+    }
+
+    override fun setAttribute(name: String, value: String?) {
+        super<IosBaseNativeImpl>.setAttribute(name, value)
+        applyIosStyledFilterAttribute(
+            name = name,
+            value = value,
+            getBase = { getBaseVisuals() },
+            setBase = { setBaseVisuals(it) }
+        )
+    }
+
     override fun dispose() {
+        (button as? UikitStyledButtonView)?.onLayoutSubviewsCallback = null
         backdropController.clear()
         super.dispose()
     }

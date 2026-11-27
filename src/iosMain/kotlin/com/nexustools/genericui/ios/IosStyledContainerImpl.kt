@@ -197,4 +197,14 @@ class IosStyledContainerImpl(
         backdropController.clear()
         super.dispose()
     }
+
+    override fun setAttribute(name: String, value: String?) {
+        super<IosBaseContainerNativeImpl>.setAttribute(name, value)
+        applyIosStyledFilterAttribute(
+            name = name,
+            value = value,
+            getBase = { visualController.baseVisuals },
+            setBase = { setStyledVisuals(it) }
+        )
+    }
 }

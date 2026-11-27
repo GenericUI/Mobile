@@ -1,7 +1,12 @@
 package com.nexustools.genericui.android
 
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import com.nexustools.genericui.component.layout.LayoutBackendTarget
 import com.nexustools.genericui.enums.css.CssBorderStyle
+import com.nexustools.genericui.style.css.ComputedStyle
+import com.nexustools.genericui.style.css.CssFilter
+import com.nexustools.genericui.style.css.CssLength
 import com.nexustools.genericui.style.css.StyledVisualSpec
 import com.nexustools.genericui.style.gradient.Gradient.LinearGradient
 import com.nexustools.genericui.style.gradient.Gradient.RadialGradient
@@ -72,5 +77,119 @@ internal object AndroidStyledVisualUtil {
             }
         }
         return drawable
+    }
+
+    fun isBackdropAttributeName(name: String): Boolean =
+        name.equals("backdrop-filter", ignoreCase = true) ||
+            name.equals("-webkit-backdrop-filter", ignoreCase = true) ||
+            name.equals("backdropFilter", ignoreCase = true) ||
+            name.equals("backdropBlurPx", ignoreCase = true)
+
+    fun recordBackdropAttributeOverride(
+        attributes: MutableMap<String, String>,
+        name: String,
+        value: String?
+    ) {
+        when {
+            name.equals("backdrop-filter", ignoreCase = true) ||
+                name.equals("-webkit-backdrop-filter", ignoreCase = true) ||
+                name.equals("backdropFilter", ignoreCase = true) -> {
+                if (value == null) attributes.remove("attrBackdropFilter")
+                else attributes["attrBackdropFilter"] = value
+            }
+            name.equals("backdropBlurPx", ignoreCase = true) -> {
+                if (value == null) attributes.remove("attrBackdropBlurPx")
+                else attributes["attrBackdropBlurPx"] = value
+            }
+        }
+    }
+
+    fun applyBackdropAttributeOverrides(
+        spec: StyledVisualSpec,
+        attributes: Map<String, String>
+    ): StyledVisualSpec {
+        val attrFilterRaw = attributes["attrBackdropFilter"]
+        val attrFilter = attrFilterRaw?.let { CssFilter.parse(it) }
+        val attrBlurPx = attributes["attrBackdropBlurPx"]?.toFloatOrNull()
+        if (attrFilter == null && attrBlurPx == null) return spec
+        return spec.copy(
+            backdropFilter = attrFilter ?: spec.backdropFilter,
+            backdropBlurPx = attrBlurPx ?: spec.backdropBlurPx
+        )
+    }
+
+    fun resolveStateVisuals(
+        computedBase: StyledVisualSpec,
+        baseVisuals: StyledVisualSpec?,
+        computedStyle: ComputedStyle?,
+        attributes: Map<String, String>,
+        isEnabled: Boolean,
+        hovered: Boolean,
+        focused: Boolean,
+        activePressed: Boolean,
+        hoverVisuals: StyledVisualSpec? = null,
+        focusVisuals: StyledVisualSpec? = null,
+        activeVisuals: StyledVisualSpec? = null,
+        disabledVisuals: StyledVisualSpec? = null
+    ): StyledVisualSpec {
+        var effective = computedBase.mergeWith(baseVisuals)
+        effective = if (!isEnabled) {
+            val computedDisabled = computedStyle?.disabledStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
+            effective.mergeWith(computedDisabled).mergeWith(disabledVisuals)
+        } else {
+            if (hovered) {
+                val computedHover = computedStyle?.hoverStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
+                effective = effective.mergeWith(computedHover).mergeWith(hoverVisuals)
+            }
+            if (focused) {
+                val computedFocus = computedStyle?.focusStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
+                effective = effective.mergeWith(computedFocus).mergeWith(focusVisuals)
+            }
+            if (activePressed) {
+                val computedActive = computedStyle?.activeStyle?.let { StyledVisualSpec.fromComputedStyle(it) }
+                effective = effective.mergeWith(computedActive).mergeWith(activeVisuals)
+            }
+            effective
+        }
+        return applyBackdropAttributeOverrides(effective, attributes)
+            .forBackend(LayoutBackendTarget.ANDROID)
+    }
+
+    fun applyBackdropControllerSpec(
+        controller: AndroidHardwareBackdropBlurController,
+        spec: StyledVisualSpec,
+        overlayDrawable: Drawable?
+    ) {
+        val effFilter = CssFilter.backdropBlurOrFilter(spec.backdropBlurPx, spec.backdropFilter)
+        if (effFilter == null) {
+            controller.backdropBlurPx = 0f
+            controller.backdropFilter = null
+            controller.backdropCornerRadiusPx = 0f
+            controller.backdropOverlayDrawable = null
+            return
+        }
+        val rawBlurPx = effFilter.blur?.resolvePx()?.takeIf { it > 0f }
+        val scaledBlurPx = rawBlurPx?.let { AndroidViewHandle.dpToPxFloat(it) }
+        val scaledShadow = effFilter.dropShadow?.let { sh ->
+            sh.copy(
+                offsetX = CssLength.px(AndroidViewHandle.dpToPxFloat(sh.offsetX.resolvePx() ?: 0f)),
+                offsetY = CssLength.px(AndroidViewHandle.dpToPxFloat(sh.offsetY.resolvePx() ?: 0f)),
+                blurRadius = CssLength.px(AndroidViewHandle.dpToPxFloat((sh.blurRadius.resolvePx() ?: 0f).coerceAtLeast(0f))),
+                spreadRadius = CssLength.px(AndroidViewHandle.dpToPxFloat(sh.spreadRadius.resolvePx() ?: 0f))
+            )
+        }
+        val scaledFilter = effFilter.copy(
+            blur = scaledBlurPx?.let { CssLength.px(it) } ?: effFilter.blur,
+            dropShadow = scaledShadow
+        )
+        val rawCornerRadiusPx = (spec.borderRadiusPx ?: 0f).coerceAtLeast(0f)
+        controller.backdropBlurPx = scaledBlurPx ?: 0f
+        controller.backdropFilter = scaledFilter
+        controller.backdropCornerRadiusPx = if (rawCornerRadiusPx > 0f) {
+            AndroidViewHandle.dpToPxFloat(rawCornerRadiusPx)
+        } else {
+            0f
+        }
+        controller.backdropOverlayDrawable = overlayDrawable
     }
 }
